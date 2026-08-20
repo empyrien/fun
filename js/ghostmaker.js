@@ -17,7 +17,7 @@
 
   // keep the query in step with the script tag's ?v= — it pins matching
   // data through the CDN cache whenever the two evolve together
-  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=10";
+  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=11";
   var ROW_ORDER = ["bg", "skin", "head", "eyes", "mouth", "hand_left", "hand_right", "propulsion"];
   var SLOT_LABEL = {
     bg: "Backdrop", skin: "Skin", head: "Head", eyes: "Eyes", mouth: "Mouth",
@@ -29,6 +29,11 @@
     mouth: "expression_mouth", hand_left: "none", hand_right: "gesture_relaxed", propulsion: "none"
   };
   var CHIP_ART = 44;   // chip inner art box, px
+
+  // A ghost always has eyes and (unless a rule forbids it — skull mask) a
+  // mouth. The collection agrees: 0 of 9,308 minted ghosts lack eyes, and
+  // the only 86 without a mouth are exactly the skull-mask ghosts.
+  var REQUIRED = { eyes: true, mouth: true };
 
   var G = null;                 // data file
   var TRAIT_SLOTS = [];         // non-skin trait slots, paint order
@@ -147,6 +152,7 @@
     Object.keys(G.traits[slot]).forEach(function (base) {
       var o = G.traits[slot][base];
       if (!(skin in o.skins)) return;
+      if (REQUIRED[slot] && base === "none") return;
       var isJp = (slot === "hand_left" && base === jp.hand_left) ||
                  (slot === "hand_right" && base === jp.hand_right) ||
                  (slot === "propulsion" && jp.propulsion.indexOf(base) !== -1);
@@ -174,6 +180,13 @@
     var opts = optionsFor(slot);
     for (var i = 0; i < opts.length; i++) if (opts[i].id === base) return true;
     return false;
+  }
+
+  // most-common eligible option for a required slot, avoiding one base
+  function requiredFallback(slot, notBase) {
+    var opts = optionsFor(slot);
+    for (var i = 0; i < opts.length; i++) if (opts[i].id !== notBase) return opts[i].id;
+    return "none";
   }
 
   // ---------- shelf rows --------------------------------------------------
@@ -412,7 +425,7 @@
             ? aLab + " leaves no room for " + SLOT_LABEL[B].toLowerCase() + " — cleared"
             : aLab + " comes as a pair — " + SLOT_LABEL[B].toLowerCase() + " matched" });
         } else {
-          state[A] = "none";
+          state[A] = REQUIRED[A] ? requiredFallback(A, a) : "none";
           touched[A] = true;
           msgs.push({ t: b === "none"
             ? aLab + " needs an empty " + SLOT_LABEL[B].toLowerCase() + " — removed"
@@ -422,6 +435,19 @@
       }
       if (!moved) break;
     }
+
+    // a ghost is never faceless: restore required slots unless a rule is
+    // actively forcing them empty (the skull mask)
+    Object.keys(REQUIRED).forEach(function (s) {
+      if (state[s] !== "none") return;
+      var forced = reqs.some(function (r) {
+        return r.then[0] === s && r.then[1] === "none" && state[r["if"][0]] === r["if"][1];
+      });
+      if (!forced) {
+        state[s] = requiredFallback(s, null);
+        msgs.push({ t: SLOT_LABEL[s].toLowerCase() + " restored — every ghost needs " + (s === "eyes" ? "eyes" : "a mouth") });
+      }
+    });
   }
 
   function userSet(slot, id, dirHint) {
@@ -433,7 +459,11 @@
       state.skin = id;
       TRAIT_SLOTS.forEach(function (s) {
         var b = state[s];
-        if (b !== "none" && !availableNow(s, b)) {
+        if (b === "none" || availableNow(s, b)) return;
+        if (REQUIRED[s]) {
+          state[s] = requiredFallback(s, b);
+          msgs.push({ t: traitLabel(s, b) + " — no " + skinLabel(id) + " version — swapped to " + traitLabel(s, state[s]), warn: true });
+        } else {
           state[s] = "none";
           msgs.push({ t: traitLabel(s, b) + " — no " + skinLabel(id) + " version — dropped", warn: true });
         }
