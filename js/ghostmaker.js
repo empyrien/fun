@@ -17,7 +17,7 @@
 
   // keep the query in step with the script tag's ?v= — it pins matching
   // data through the CDN cache whenever the two evolve together
-  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=9";
+  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=10";
   var ROW_ORDER = ["bg", "skin", "head", "eyes", "mouth", "hand_left", "hand_right", "propulsion"];
   var SLOT_LABEL = {
     bg: "Backdrop", skin: "Skin", head: "Head", eyes: "Eyes", mouth: "Mouth",
@@ -192,26 +192,27 @@
     this.meta.innerHTML =
       '<div class="rowtext"><span class="rowname">' + SLOT_LABEL[slot] + '</span>' +
       '<span class="rowval" aria-live="polite"></span></div>' +
+      '<button class="browse" aria-label="Browse all ' + SLOT_LABEL[slot].toLowerCase() + ' parts" title="Browse all ' + SLOT_LABEL[slot].toLowerCase() + ' parts">⌕</button>' +
       '<button class="dice" aria-label="Random ' + SLOT_LABEL[slot].toLowerCase() + '" title="Random ' + SLOT_LABEL[slot].toLowerCase() + '">⚄</button>';
     this.val = this.meta.querySelector(".rowval");
     this.meta.querySelector(".dice").addEventListener("click", function (e) {
       e.stopPropagation();
       diceRoll(slot);
     });
+    this.meta.querySelector(".browse").addEventListener("click", function (e) {
+      e.stopPropagation();
+      openPicker(slot);
+    });
     this.meta.addEventListener("keydown", function (e) {
       if (e.key === "ArrowLeft") { e.preventDefault(); self.step(-1); }
       if (e.key === "ArrowRight") { e.preventDefault(); self.step(1); }
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPicker(slot); }
     });
-    // clicking the label (or the count on the far side) opens the part browser
-    this.meta.addEventListener("click", function () {
-      if (!self.eatClick()) openPicker(slot);
-    });
 
     this.prevChip = document.createElement("button");
-    this.prevChip.className = "chip";
+    this.prevChip.className = "chip chip-prev " + rc;
     this.nextChip = document.createElement("button");
-    this.nextChip.className = "chip";
+    this.nextChip.className = "chip chip-next " + rc;
     [this.prevChip, this.nextChip].forEach(function (chip) {
       chip.type = "button";
       chip.appendChild(document.createElement("canvas"));
@@ -221,50 +222,22 @@
       noneEl.textContent = "∅";
       noneEl.style.display = "none";
       chip.appendChild(noneEl);
-      // the part image itself opens the browser
-      chip.addEventListener("click", function () { if (!self.eatClick()) openPicker(slot); });
     });
-
-    // arrows point from the waiting parts at the ghost; clicking one pulls
-    // that part in
-    this.prevArrow = document.createElement("button");
-    this.prevArrow.type = "button";
-    this.prevArrow.className = "arrow";
-    this.prevArrow.textContent = "→";
-    this.nextArrow = document.createElement("button");
-    this.nextArrow.type = "button";
-    this.nextArrow.className = "arrow";
-    this.nextArrow.textContent = "←";
-    this.prevArrow.addEventListener("click", function () { if (!self.eatClick()) self.step(-1); });
-    this.nextArrow.addEventListener("click", function () { if (!self.eatClick()) self.step(1); });
-
-    this.shelfPrev = document.createElement("div");
-    this.shelfPrev.className = "shelf shelf-prev " + rc;
-    this.shelfPrev.appendChild(this.prevChip);
-    this.shelfPrev.appendChild(this.prevArrow);
-    this.shelfNext = document.createElement("div");
-    this.shelfNext.className = "shelf shelf-next " + rc;
-    this.shelfNext.appendChild(this.nextArrow);
-    this.shelfNext.appendChild(this.nextChip);
+    // clicking a waiting part puts it on the ghost
+    this.prevChip.addEventListener("click", function () { if (!self.eatClick()) self.step(-1); });
+    this.nextChip.addEventListener("click", function () { if (!self.eatClick()) self.step(1); });
 
     this.count = document.createElement("div");
     this.count.className = "rowcount " + rc;
-    this.count.tabIndex = 0;
-    this.count.setAttribute("role", "button");
-    this.count.setAttribute("aria-label", "Browse all " + SLOT_LABEL[slot].toLowerCase() + " parts");
-    this.count.addEventListener("click", function () { openPicker(slot); });
-    this.count.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPicker(slot); }
-    });
 
     bench.appendChild(this.meta);
-    bench.appendChild(this.shelfPrev);
-    bench.appendChild(this.shelfNext);
+    bench.appendChild(this.prevChip);
+    bench.appendChild(this.nextChip);
     bench.appendChild(this.count);
 
     // drag a row like a conveyor: every 64px is one step
     this.suppressClick = false;
-    [this.meta, this.shelfPrev, this.shelfNext].forEach(function (el) { self.attachDrag(el); });
+    [this.meta, this.prevChip, this.nextChip].forEach(function (el) { self.attachDrag(el); });
   }
 
   Row.prototype.eatClick = function () {
@@ -339,16 +312,8 @@
       minted = G.traits[this.slot][cur].minted;
     }
     this.count.textContent = minted ? num(minted) + " minted" : (cur === "none" ? "" : (this.slot === "bg" ? "" : "vault only"));
-    var p = this.neighbor(-1), n = this.neighbor(1);
-    this.paintChip(this.prevChip, p, "previous");
-    this.paintChip(this.nextChip, n, "next");
-    this.prevArrow.disabled = !p;
-    this.nextArrow.disabled = !n;
-    var name = SLOT_LABEL[this.slot].toLowerCase();
-    this.prevArrow.setAttribute("aria-label", p ? "Bring in previous " + name + ": " + p.label : "No other options");
-    this.nextArrow.setAttribute("aria-label", n ? "Bring in next " + name + ": " + n.label : "No other options");
-    this.prevArrow.title = p ? "Bring in " + p.label : "";
-    this.nextArrow.title = n ? "Bring in " + n.label : "";
+    this.paintChip(this.prevChip, this.neighbor(-1), "previous");
+    this.paintChip(this.nextChip, this.neighbor(1), "next");
   };
 
   Row.prototype.paintChip = function (chip, opt, word) {
@@ -359,12 +324,12 @@
     var ctx = cv.getContext("2d");
     ctx.clearRect(0, 0, CHIP_ART, CHIP_ART);
     if (!opt) {
-      chip.setAttribute("aria-label", "Browse " + SLOT_LABEL[this.slot].toLowerCase() + " parts");
+      chip.setAttribute("aria-label", "No other " + SLOT_LABEL[this.slot].toLowerCase() + " options");
       noneEl.style.display = "none";
       return;
     }
-    chip.setAttribute("aria-label", "Browse " + SLOT_LABEL[this.slot].toLowerCase() + " parts (" + word + " in line: " + opt.label + ")");
-    chip.title = opt.label + " — click to browse all";
+    chip.setAttribute("aria-label", "Put on " + word + " " + SLOT_LABEL[this.slot].toLowerCase() + ": " + opt.label);
+    chip.title = "Put on " + opt.label;
     if (!opt.file || opt.id === "none") {
       noneEl.style.display = "";
       cv.style.display = "none";

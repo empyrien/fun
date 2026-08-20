@@ -53,7 +53,7 @@
     position: relative;
     display: grid;
     /* the ghost track carries extra air on both sides of the canvas */
-    grid-template-columns: minmax(130px, 1fr) 92px calc(47px * var(--gs) + 40px) 92px minmax(130px, 1fr);
+    grid-template-columns: minmax(170px, 1fr) 56px calc(47px * var(--gs) + 64px) 56px minmax(170px, 1fr);
     grid-auto-rows: 80px;
     column-gap: 26px;
     align-items: center;
@@ -82,42 +82,28 @@
   /* row meta (left rail): trait name, current value, dice */
   .rowmeta {
     justify-self: end; text-align: right; min-width: 0; max-width: 100%;
-    display: flex; align-items: center; gap: 12px;
-    outline: none; border-radius: 10px; padding: 6px 8px;
+    display: flex; align-items: center; gap: 7px;
+    outline: none; border-radius: 10px; padding: 6px 4px 6px 8px;
   }
+  .rowmeta .rowtext { margin-right: 3px; }
   .rowmeta:focus-visible { box-shadow: 0 0 0 2px var(--led-dim); }
   .rowtext { min-width: 0; }
   .rowname { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em; color: var(--ink-dim); text-transform: uppercase; margin-bottom: 3px; }
   .rowval { display: block; font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; color: var(--led); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .dice {
+  .dice, .browse {
     background: none; border: 1px solid var(--card-edge); border-radius: 9px;
-    color: var(--ink-dim); font-size: 13px; line-height: 1; padding: 6px 8px; cursor: pointer; flex: none;
+    color: var(--ink-dim); font-size: 13px; line-height: 1; padding: 6px; cursor: pointer; flex: none;
     transition: color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   }
-  .dice:hover { color: var(--led); border-color: var(--led-dim); }
+  .dice:hover, .browse:hover { color: var(--led); border-color: var(--led-dim); }
   .dice:active { transform: rotate(72deg); }
+  .browse { font-size: 14px; }
+  .browse:active { transform: scale(0.92); }
 
   /* minted count (right rail) */
   .rowcount { justify-self: start; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--ink-dim); text-transform: uppercase; white-space: nowrap; }
 
-  /* part shelves: the previous / next layer for each type, with an arrow
-     pointing at the ghost — click the arrow to pull that part in, click
-     the part itself to browse everything */
-  .shelf { display: flex; align-items: center; gap: 6px; }
-  .shelf .arrow {
-    width: 30px; height: 56px; padding: 0; cursor: pointer;
-    background: var(--card);
-    border: 1px solid var(--card-edge); border-radius: 12px;
-    color: var(--ink-dim); font: 500 16px/1 var(--mono);
-    box-shadow: 0 10px 20px -14px rgba(0, 0, 0, 0.5);
-    transition: color 0.16s ease, border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
-  }
-  .shelf .arrow:hover { color: var(--led); border-color: var(--led-dim); background: rgba(255,255,255,0.075); }
-  .shelf-prev .arrow:hover { transform: translateX(2px); }
-  .shelf-next .arrow:hover { transform: translateX(-2px); }
-  .shelf .arrow:active { transform: scale(0.94); }
-  .shelf .arrow:focus-visible { box-shadow: 0 0 0 2px var(--led-dim); outline: none; }
-  .shelf .arrow:disabled { opacity: 0.25; cursor: default; transform: none; background: var(--card); border-color: var(--card-edge); color: var(--ink-dim); }
+  /* part shelves: click the previous / next layer to put it on the ghost */
   .chip {
     width: 56px; height: 56px; padding: 5px; cursor: pointer;
     background: var(--card);
@@ -172,35 +158,27 @@
     :root { --gs: 6; }
     .wrap { padding-left: 20px; padding-right: 20px; }
     .bench {
-      grid-template-columns: 88px minmax(0, 1fr) 88px;
+      grid-template-columns: 56px minmax(0, 1fr) 56px;
       grid-template-rows: auto;      /* row 1 fits the ghost */
       grid-auto-rows: 70px;
-      column-gap: 10px;
+      column-gap: 12px;
     }
     .ghostcol { grid-column: 1 / -1; grid-row: 1; padding-bottom: 30px; }
     .bench .r1 { grid-row: 2; } .bench .r2 { grid-row: 3; } .bench .r3 { grid-row: 4; } .bench .r4 { grid-row: 5; }
     .bench .r5 { grid-row: 6; } .bench .r6 { grid-row: 7; } .bench .r7 { grid-row: 8; } .bench .r8 { grid-row: 9; }
-    .shelf .arrow { width: 26px; height: 52px; font-size: 14px; }
-    .shelf-prev { grid-column: 1; }
+    .chip-prev { grid-column: 1; }
     .rowmeta { grid-column: 2; justify-self: stretch; justify-content: center; text-align: center; }
-    .shelf-next { grid-column: 3; }
+    .chip-next { grid-column: 3; }
     .rowcount { display: none; }
   }
   @media (min-width: 761px) {
     .rowmeta { grid-column: 1; }
-    .shelf-prev { grid-column: 2; }
-    .shelf-next { grid-column: 4; }
+    .chip-prev { grid-column: 2; }
+    .chip-next { grid-column: 4; }
     .rowcount { grid-column: 5; }
   }
 
   /* ---------- part browser (ported from /studio's trait picker) --------- */
-  .rowmeta { cursor: pointer; }
-  .rowmeta:hover .rowval { color: #5cf0cb; }
-  .rowmeta:hover .rowname { color: var(--ink); }
-  .rowcount { cursor: pointer; border-radius: 8px; padding: 6px 8px; }
-  .rowcount:hover { color: var(--ink); }
-  .rowcount:focus-visible { box-shadow: 0 0 0 2px var(--led-dim); outline: none; }
-
   .picker-backdrop {
     position: fixed; inset: 0; z-index: 100;
     display: flex; justify-content: flex-end;
@@ -324,6 +302,6 @@
   </div>
 </main>
 <canvas id="mini" width="47" height="47" aria-hidden="true"></canvas>
-<script src="/js/ghostmaker.js?v=9"></script>
+<script src="/js/ghostmaker.js?v=10"></script>
 </body>
 </html>
