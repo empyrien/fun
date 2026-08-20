@@ -49,4 +49,7 @@ index (`ghost-assets/ghost-anim-data.json`) are not included — the app loads
 them by root-relative path on deadpixels.club. To run this elsewhere you'd
 point those paths (and the build script's input) at the live site.
 
-All Dead Pixels Ghost Club artwork © Dead Pixels Ghost Club.
+## License
+
+Code is [MIT](LICENSE). All Dead Pixels Ghost Club artwork remains
+© Dead Pixels Ghost Club and is not covered by the code license.
