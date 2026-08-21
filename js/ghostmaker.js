@@ -17,7 +17,7 @@
 
   // keep the query in step with the script tag's ?v= — it pins matching
   // data through the CDN cache whenever the two evolve together
-  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=11";
+  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=12";
   var ROW_ORDER = ["bg", "skin", "head", "eyes", "mouth", "hand_left", "hand_right", "propulsion"];
   var SLOT_LABEL = {
     bg: "Backdrop", skin: "Skin", head: "Head", eyes: "Eyes", mouth: "Mouth",
@@ -410,15 +410,25 @@
     }
 
     var reqs = G.rules.requires || [];
+    // the user's pick has priority: rules IT triggers run first, so picking
+    // one half of a pair completes that pair before the rules of whatever
+    // was previously equipped get a chance to react (else e.g. stepping
+    // from boxing gloves onto the watergun destroyed both hands)
+    var ordered = reqs.slice().sort(function (x, y) {
+      return (x["if"][0] === changed ? 0 : 1) - (y["if"][0] === changed ? 0 : 1);
+    });
     for (var pass = 0; pass < 4; pass++) {
       var moved = false;
-      for (var i = 0; i < reqs.length; i++) {
-        var r = reqs[i];
+      for (var i = 0; i < ordered.length; i++) {
+        var r = ordered[i];
         var A = r["if"][0], a = r["if"][1], B = r.then[0], b = r.then[1];
         if (state[A] !== a || state[B] === b) continue;
         var aLab = traitLabel(A, a);
         var canSetB = b === "none" || availableNow(B, b);
-        if (canSetB && !touched[B]) {
+        // a completion may still fill a slot an earlier rule merely EMPTIED
+        // (jetpack rig split, pair breakup) — only slots holding a real
+        // value stay protected
+        if (canSetB && B !== changed && (!touched[B] || state[B] === "none")) {
           state[B] = b;
           touched[B] = true;
           msgs.push({ t: b === "none"
