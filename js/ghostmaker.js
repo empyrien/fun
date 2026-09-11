@@ -1027,16 +1027,54 @@
     var bgReady = includeBg && !skip("bg") && bgFile
       ? loadImg(assetUrl("bg", bgFile))
       : Promise.resolve(null);
+    // The ghost is built on its own transparent layer so accessory cuts
+    // (below) never punch through the backdrop.
+    var ghost = document.createElement("canvas");
+    ghost.width = size; ghost.height = size;
+    var gctx = ghost.getContext("2d");
+    gctx.imageSmoothingEnabled = false;
     return bgReady.then(function (bg) {
-      if (bg) ctx.drawImage(bg, 0, 0, size, size);
       (NEON.paintOrder || NEON_PAINT_ORDER).forEach(function (slot) {
         if (skip(slot) || sourceState[slot] === "none") return;
         var cell = neonCell(slot, sourceState[slot]);
         if (cell == null) throw new Error("missing Neon atlas cell: " + slot + "/" + sourceState[slot]);
-        drawAtlasCell(ctx, cell, 0, 0, size, size);
+        // An accessory in an accent colour sits over the body's glowing
+        // outline; without this the outline shows through the accessory's
+        // faint glow rim (the "opposite colour" at both ends of the shades).
+        // Cut the body out of the accessory's footprint first so the piece
+        // owns its own glow.
+        var base = baseOf(sourceState[slot]);
+        if ((NEON.accentBases[slot] || []).indexOf(base) !== -1) {
+          gctx.globalCompositeOperation = "destination-out";
+          gctx.drawImage(neonCutMask(cell), 0, 0, size, size);
+          gctx.globalCompositeOperation = "source-over";
+        }
+        drawAtlasCell(gctx, cell, 0, 0, size, size);
       });
+      if (bg) ctx.drawImage(bg, 0, 0, size, size);
+      ctx.drawImage(ghost, 0, 0);
       return frame;
     });
+  }
+
+  // opaque wherever an atlas cell has real presence (alpha > 20): the
+  // footprint an accent accessory claims from the body glow beneath it
+  var neonCutCache = new Map();
+  function neonCutMask(cell) {
+    if (neonCutCache.has(cell)) return neonCutCache.get(cell);
+    var cv = document.createElement("canvas");
+    cv.width = NEON.cell; cv.height = NEON.cell;
+    var c = cv.getContext("2d", { willReadFrequently: true });
+    drawAtlasCell(c, cell, 0, 0, NEON.cell, NEON.cell);
+    var img = c.getImageData(0, 0, NEON.cell, NEON.cell);
+    var d = img.data;
+    for (var i = 0; i < d.length; i += 4) {
+      var on = d[i + 3] > 20;
+      d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = on ? 255 : 0;
+    }
+    c.putImageData(img, 0, 0);
+    neonCutCache.set(cell, cv);
+    return cv;
   }
 
   function render(pop, excludeSlots) {
