@@ -62,8 +62,6 @@
   var neonBoundsCache = new Map();
   var neonMode = false;
   var classicState = null;
-  var lockedSerial = null;      // exact minted Neon blueprint (bespoke exceptions included)
-  var neonDeck = [], neonCursor = -1;
   var TRAIT_SLOTS = [];         // non-skin trait slots, paint order
   var state = {};
   var rows = {};                // slot -> Row
@@ -195,9 +193,10 @@
     });
   }
 
+  // the classic ⇄ neon switch: idle | loading | active | error
   function setNeonButton(mode) {
-    var button = document.getElementById("btn-neon-build");
-    if (!button) return;
+    var sw = document.getElementById("mode-switch");
+    if (!sw) return;
     var bench = document.getElementById("bench");
     document.body.classList.toggle("neon-loading", mode === "loading");
     if (bench) {
@@ -206,28 +205,24 @@
       else bench.removeAttribute("aria-busy");
     }
     var random = document.getElementById("btn-random");
-    if (random && lockedSerial == null) {
+    if (random) {
       random.textContent = mode === "active" ? "Randomize Neon" : "Randomize all";
       random.title = mode === "active" ? "Build another rule-compatible Neon" : "Randomize a classic ghost";
     }
-    button.disabled = mode === "loading";
-    button.setAttribute("aria-pressed", mode === "active" ? "true" : "false");
-    if (mode === "loading") {
-      button.textContent = "Loading Neon…";
-      button.setAttribute("aria-busy", "true");
-      button.title = "Loading the Neon trait atlas";
-    } else if (mode === "active") {
-      button.textContent = "Classic builder";
-      button.removeAttribute("aria-busy");
-      button.title = "Return to the classic Ghostmaker";
-    } else if (mode === "error") {
-      button.textContent = "Retry Neon lab";
-      button.removeAttribute("aria-busy");
-      button.title = "The Neon atlas did not load; retry without leaving the classic builder";
-    } else {
-      button.textContent = "Build any Neon";
-      button.removeAttribute("aria-busy");
-      button.title = "Build with every generated Neon layer inside the curated palette and compatibility rules";
+    sw.disabled = mode === "loading";
+    sw.classList.toggle("on", mode === "active");
+    sw.classList.toggle("loading", mode === "loading");
+    sw.classList.toggle("error", mode === "error");
+    sw.setAttribute("aria-checked", mode === "active" ? "true" : "false");
+    if (mode === "loading") sw.setAttribute("aria-busy", "true"); else sw.removeAttribute("aria-busy");
+    sw.title = mode === "active" ? "Switch back to the classic builder"
+      : mode === "error" ? "The Neon atlas did not load — tap to retry"
+      : "Switch on the Neon lab";
+    var status = document.getElementById("mode-status");
+    if (status) {
+      status.textContent = mode === "loading" ? "loading the Neon atlas…"
+        : mode === "error" ? "Neon atlas didn't load — tap the switch to retry"
+        : mode === "active" ? "Neon lab · curated palettes" : "classic trait vault";
     }
   }
 
@@ -309,24 +304,6 @@
     return bounds;
   }
 
-  function exitMintedMode() {
-    if (lockedSerial == null) return false;
-    lockedSerial = null;
-    neonCursor = -1;
-    document.body.classList.remove("minted-neon");
-    document.querySelectorAll(".rowmeta, .chip, .rowcount").forEach(function (el) {
-      el.inert = false;
-      el.removeAttribute("aria-hidden");
-    });
-    var btn = document.getElementById("btn-neon");
-    if (btn) btn.textContent = "Minted Neon · #9314";
-    var random = document.getElementById("btn-random");
-    if (random) { random.textContent = "Randomize all"; random.title = "Randomize a classic ghost"; }
-    var reset = document.getElementById("btn-reset");
-    if (reset) { reset.textContent = "Reset"; reset.title = "Reset to ghost #1"; }
-    return true;
-  }
-
   function leaveNeonMode() {
     if (!neonMode) return false;
     neonMode = false;
@@ -377,7 +354,6 @@
       });
       return;
     }
-    exitMintedMode();
     classicState = copyState(state);
     neonMode = true;
     document.body.classList.add("neon-builder");
@@ -386,31 +362,6 @@
     syncRows();
     render(true);
     pushLog([{ t: "Neon lab open — 98 curated recipes · unlisted colour combinations stay blocked" }]);
-  }
-
-  function nextMintedNeon() {
-    if (!neonDeck.length) return;
-    neonOpenRequest++;
-    clearFx();
-    leaveNeonMode();
-    neonCursor = (neonCursor + 1) % neonDeck.length;
-    lockedSerial = neonDeck[neonCursor];
-    document.body.classList.add("minted-neon");
-    var btn = document.getElementById("btn-neon");
-    if (btn) btn.textContent = "Next Minted Neon · #" + lockedSerial;
-    var random = document.getElementById("btn-random");
-    if (random) { random.textContent = "Randomize classic"; random.title = "Leave this minted preset and randomize a classic ghost"; }
-    // `leaveNeonMode()` restores the classic state, so also rebuild every
-    // shelf's option deck before those shelves become interactive again.
-    syncRows();
-    document.querySelectorAll(".rowmeta, .chip, .rowcount").forEach(function (el) {
-      el.inert = true;
-      el.setAttribute("aria-hidden", "true");
-    });
-    var reset = document.getElementById("btn-reset");
-    if (reset) { reset.textContent = "Return to classic"; reset.title = "Leave the minted preset and return to ghost #1"; }
-    render(true);
-    pushLog([{ t: "ghost #" + lockedSerial + " — exact minted Neon · cycle it, build any Neon, or return to classic" }]);
   }
 
   function skinLabel(id) {
@@ -622,6 +573,7 @@
     this.meta.innerHTML =
       '<div class="rowtext"><span class="rowname">' + SLOT_LABEL[slot] + '</span>' +
       '<span class="rowval"></span></div>' +
+      '<button class="revert" aria-label="Revert ' + SLOT_LABEL[slot].toLowerCase() + ' to the baseline (ghost #1)" title="Back to the baseline ' + SLOT_LABEL[slot].toLowerCase() + '">↺</button>' +
       '<button class="browse" aria-label="Browse all ' + SLOT_LABEL[slot].toLowerCase() + ' parts" title="Browse all ' + SLOT_LABEL[slot].toLowerCase() + ' parts">⌕</button>' +
       '<button class="dice" aria-label="Random ' + SLOT_LABEL[slot].toLowerCase() + '" title="Random ' + SLOT_LABEL[slot].toLowerCase() + '">⚄</button>';
     this.val = this.meta.querySelector(".rowval");
@@ -632,6 +584,10 @@
     this.meta.querySelector(".browse").addEventListener("click", function (e) {
       e.stopPropagation();
       openPicker(slot);
+    });
+    this.meta.querySelector(".revert").addEventListener("click", function (e) {
+      e.stopPropagation();
+      revertSlot(slot);
     });
     this.meta.addEventListener("keydown", function (e) {
       // Let the nested Browse and Random buttons keep their native keyboard
@@ -1009,11 +965,7 @@
       neonUserSet(slot, id);
       return;
     }
-    var leftMinted = exitMintedMode();
-    if (state[slot] === id) {
-      if (leftMinted) render(true);
-      return;
-    }
+    if (state[slot] === id) return;
     clearFx();
     var prev = snapshotLayers();
     var msgs = [];
@@ -1045,9 +997,6 @@
   var renderToken = 0;
   function layerUrls(excludeSlots) {
     function skip(s) { return excludeSlots && excludeSlots.indexOf(s) !== -1; }
-    if (lockedSerial != null) {
-      return [skip("bg") ? "/sprites/" + lockedSerial + ".webp" : "/art141/" + lockedSerial + ".png"];
-    }
     var urls = [];
     var bgf = currentFile("bg");
     if (bgf && !skip("bg")) urls.push(assetUrl("bg", bgf));
@@ -1502,7 +1451,6 @@
   // ---------- readouts ----------------------------------------------------
 
   function unitId() {
-    if (lockedSerial != null) return String(lockedSerial);
     var s = ROW_ORDER.map(function (k) {
       var id = stateIdFor(k);
       // Recipe metadata controls future choices but does not change the
@@ -1517,18 +1465,12 @@
 
   function updateUnit() {
     var unit = document.getElementById("unit");
-    unit.textContent = lockedSerial != null
-      ? "GHOST #" + lockedSerial + " · MINTED NEON"
-      : (neonMode ? "NEON " + unitId() + " · CURATED" : "UNIT " + unitId());
+    unit.textContent = neonMode ? "NEON " + unitId() + " · CURATED" : "UNIT " + unitId();
     var ghost = document.getElementById("ghost");
-    if (lockedSerial != null) {
-      ghost.setAttribute("aria-label", "Minted Neon ghost #" + lockedSerial);
-    } else {
-      var summary = ROW_ORDER.map(function (slot) {
-        return SLOT_LABEL[slot] + ": " + traitLabel(slot, stateIdFor(slot));
-      }).join("; ");
-      ghost.setAttribute("aria-label", (neonMode ? "Curated Neon ghost. " : "Assembled ghost. ") + summary);
-    }
+    var summary = ROW_ORDER.map(function (slot) {
+      return SLOT_LABEL[slot] + ": " + traitLabel(slot, stateIdFor(slot));
+    }).join("; ");
+    ghost.setAttribute("aria-label", (neonMode ? "Curated Neon ghost. " : "Assembled ghost. ") + summary);
     updateMintBadge();
   }
 
@@ -1598,7 +1540,6 @@
   // serials already minted with the bench's traits (backdrop aside), or []
   function circulationSerials() {
     if (!circ) buildCirculation();
-    if (lockedSerial != null) return [lockedSerial];
     if (neonMode) return circ.neon.get(neonSigOf(state)) || [];
     var sig = classicSig();
     return sig ? (circ.classic.get(sig) || []) : [];
@@ -1619,9 +1560,7 @@
       var list = serials.map(function (s) { return "#" + s; });
       pill.appendChild(document.createTextNode("Already in circulation — ghost " +
         (list.length === 1 ? list[0] : list.slice(0, 2).join(" & ") + (list.length > 2 ? " +" + (list.length - 2) : ""))));
-      sub.textContent = lockedSerial != null
-        ? "the real minted Neon, as minted"
-        : "same traits as a minted ghost, backdrop aside — competition entries must be new";
+      sub.textContent = "same traits as a minted ghost, backdrop aside — competition entries must be new";
     } else {
       pill.appendChild(document.createTextNode("Not in circulation"));
       sub.textContent = neonMode ? "no minted Neon shares these layers" : "no minted ghost shares this trait combo";
@@ -1664,6 +1603,32 @@
     pushLog([{ t: "random curated Neon — " + recipeLabel(currentRecipe()) }]);
   }
 
+  // the baseline is Ghost #1; in the Neon lab it's the Neon default for the
+  // palette currently on the body, so a reverted face stays colour-matched
+  function baselineFor(slot) {
+    if (!neonMode) return DEFAULT_STATE[slot];
+    if (slot === "bg") return "starlight";
+    if (slot === "skin") return defaultNeonState().skin;
+    var base = slot === "eyes" ? "expression_eyes"
+      : slot === "mouth" ? "expression_mouth"
+      : slot === "hand_right" ? "gesture_relaxed" : null;
+    if (!base) return "none";
+    var body = parseNeonVariant(state.skin, "skin");
+    return findNeonLayer(slot, base, body.palette, body.light) || requiredFallback(slot, null);
+  }
+
+  function revertSlot(slot) {
+    var target = baselineFor(slot);
+    if (!target) return;
+    var name = SLOT_LABEL[slot].toLowerCase();
+    if (state[slot] === target) {
+      pushLog([{ t: name + " is already at the baseline" }]);
+      return;
+    }
+    userSet(slot, target, "prev");
+    pushLog([{ t: name + " — back to " + (neonMode ? "the Neon baseline" : "ghost #1's") }]);
+  }
+
   function diceRoll(slot) {
     var pool = optionsFor(slot).filter(function (o) { return o.id !== stateIdFor(slot); });
     if (slot !== "skin" && slot !== "bg") {
@@ -1680,7 +1645,6 @@
       return;
     }
     neonOpenRequest++;
-    exitMintedMode();
     clearFx();
     state.bg = rand(G.backgrounds).id;
     state.skin = rand(G.skins).id;
@@ -1712,7 +1676,6 @@
       return;
     }
     neonOpenRequest++;
-    exitMintedMode();
     clearFx();
     Object.keys(DEFAULT_STATE).forEach(function (k) { state[k] = DEFAULT_STATE[k]; });
     syncRows();
@@ -1740,11 +1703,7 @@
       });
       return;
     }
-    var serialAtDownload = lockedSerial;
-    var unitAtDownload = unitId();
-    var classicFilename = serialAtDownload != null
-      ? "ghostmaker-minted-neon-" + serialAtDownload + (noBg ? "-nobg" : "") + ".png"
-      : "ghostmaker-" + unitAtDownload.toLowerCase() + (noBg ? "-nobg" : "") + ".png";
+    var classicFilename = "ghostmaker-" + unitId().toLowerCase() + (noBg ? "-nobg" : "") + ".png";
     var urls = layerUrls(noBg ? ["bg"] : null);
     Promise.all(urls.map(loadImg)).then(function (imgs) {
       var cv = document.createElement("canvas");
@@ -1783,9 +1742,6 @@
   ]).then(function (res) {
     G = res[0];
     MINTED = res[1];
-    neonDeck = [9314, 9403, 9406].concat(MINTED.neonSerials.filter(function (n) {
-      return n !== 9314 && n !== 9403 && n !== 9406;
-    }));
     TRAIT_SLOTS = G.slots.filter(function (s) { return s !== "skin"; });
     Object.keys(DEFAULT_STATE).forEach(function (k) { state[k] = DEFAULT_STATE[k]; });
 
@@ -1795,13 +1751,12 @@
     });
     syncRows();
 
-    document.getElementById("btn-neon-build").addEventListener("click", toggleNeonBuilder);
-    document.getElementById("btn-neon").addEventListener("click", nextMintedNeon);
+    document.getElementById("mode-switch").addEventListener("click", toggleNeonBuilder);
     document.getElementById("btn-random").addEventListener("click", randomizeAll);
     document.getElementById("btn-reset").addEventListener("click", resetAll);
     document.getElementById("btn-save").addEventListener("click", function () { download(false); });
     document.getElementById("btn-save-nobg").addEventListener("click", function () { download(true); });
-    ["btn-neon", "btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
+    ["btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
       document.getElementById(id).disabled = false;
     });
     setNeonButton("idle");
@@ -1831,7 +1786,7 @@
     console.error("[ghostmaker] init failed", err);
     var log = document.getElementById("log");
     if (log) log.textContent = "TRAIT VAULT UNREACHABLE — RELOAD TO RETRY";
-    ["btn-neon-build", "btn-neon", "btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
+    ["mode-switch", "btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
       var b = document.getElementById(id);
       if (b) b.disabled = true;
     });
@@ -1851,7 +1806,6 @@
     set: function (slot, id) { userSet(slot, id, "next"); },
     step: function (slot, dir) { rows[slot].step(dir); },
     randomizeAll: randomizeAll,
-    nextMintedNeon: nextMintedNeon,
     toggleNeonBuilder: toggleNeonBuilder,
     reset: resetAll,
     unitId: unitId,
