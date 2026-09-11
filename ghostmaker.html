@@ -191,6 +191,7 @@
   .modeswitch {
     display: inline-flex; align-items: center; gap: 14px; padding: 9px 16px 9px 18px;
     background: var(--card); border: 1px solid var(--card-edge); border-radius: 999px; cursor: pointer;
+    background-origin: border-box; background-repeat: no-repeat;
     font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-dim);
     transition: border-color 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
   }
@@ -202,6 +203,10 @@
   .mode-track {
     position: relative; isolation: isolate; width: 48px; height: 26px; border-radius: 999px;
     background: rgba(255,255,255,0.08); border: 1px solid var(--card-edge);
+    /* lay the gradient over the border box: by default it spans the padding
+       box and repeats under the 1px border, so each end showed a sliver of
+       the gradient's opposite colour */
+    background-origin: border-box; background-repeat: no-repeat;
     transition: background 0.3s ease, border-color 0.3s ease;
   }
   /* the glow is a blurred copy of the track itself, so each half glows in
@@ -218,10 +223,12 @@
   }
   .modeswitch.on {
     border-color: rgba(255, 255, 255, 0.2);
-    background: linear-gradient(110deg, rgba(255, 40, 194, 0.10), rgba(25, 245, 255, 0.10));
+    background: linear-gradient(110deg, rgba(255, 40, 194, 0.10), rgba(25, 245, 255, 0.10)) 0 0 / 100% 100% no-repeat border-box;
     box-shadow: 0 0 30px rgba(140, 90, 255, 0.18);
   }
-  .modeswitch.on .mode-track { background: linear-gradient(90deg, #ff2cc2, #19f5ff); border-color: transparent; }
+  /* origin/repeat ride inside the shorthand — a bare `background:` here would
+     reset them and bring the wrapped-tile slivers back */
+  .modeswitch.on .mode-track { background: linear-gradient(90deg, #ff2cc2, #19f5ff) 0 0 / 100% 100% no-repeat border-box; border-color: transparent; }
   .modeswitch.on .mode-track::before { opacity: 0.7; }
   .modeswitch.on .mode-knob { transform: translateX(22px); background: #fff; box-shadow: 0 0 10px #fff; }
   .modeswitch.on .mode-neon { color: #d5fdff; text-shadow: 0 0 10px rgba(25, 245, 255, 0.75); }
