@@ -17,8 +17,16 @@
 
   // keep the query in step with the script tag's ?v= — it pins matching
   // data through the CDN cache whenever the two evolve together
-  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=12";
+  var DATA_URL = "/ghost-assets/ghostmaker-data.json?v=14";
+  var MINTED_URL = "/ghost-assets/minted-blueprints-9412.json";
+  var NEON_URL = "/ghost-assets/neon-builder-data-v1.json";
+  // Temporary competition default. The Neon lab still has an explicit
+  // Classic builder escape hatch, and failed Neon loads leave Classic usable.
+  var DEFAULT_TO_NEON = true;
   var ROW_ORDER = ["bg", "skin", "head", "eyes", "mouth", "hand_left", "hand_right", "propulsion"];
+  // Canonical compositor order verified against the minted Neon renders.
+  // Propulsion art intentionally stacks over the body where they overlap.
+  var NEON_PAINT_ORDER = ["skin", "propulsion", "hand_left", "eyes", "mouth", "head", "hand_right"];
   var SLOT_LABEL = {
     bg: "Backdrop", skin: "Skin", head: "Head", eyes: "Eyes", mouth: "Mouth",
     hand_left: "Left hand", hand_right: "Right hand", propulsion: "Propulsion"
@@ -31,11 +39,31 @@
   var CHIP_ART = 44;   // chip inner art box, px
 
   // A ghost always has eyes and (unless a rule forbids it — skull mask) a
-  // mouth. The collection agrees: 0 of 9,308 minted ghosts lack eyes, and
-  // the only 86 without a mouth are exactly the skull-mask ghosts.
+  // mouth. The collection agrees: 0 of 9,412 minted ghosts lack eyes, and
+  // the only 91 without a mouth are exactly the skull-mask ghosts.
   var REQUIRED = { eyes: true, mouth: true };
 
-  var G = null;                 // data file
+  function slotRequired(slot) {
+    if (neonMode) {
+      var neonRequired = NEON && NEON.rules && NEON.rules.required;
+      return (neonRequired || ["eyes", "mouth", "hand_right"]).indexOf(slot) !== -1;
+    }
+    return !!REQUIRED[slot];
+  }
+
+  var G = null;                 // classic trait data
+  var MINTED = null;            // exact #9309–#9412 blueprint patch
+  var NEON = null;              // complete generated Neon layer lattice + palette rules
+  var neonAtlas = null;
+  var neonLoad = null;
+  var neonOpenRequest = 0;
+  var neonIndex = {};
+  var neonSkinOptions = null;
+  var neonBoundsCache = new Map();
+  var neonMode = false;
+  var classicState = null;
+  var lockedSerial = null;      // exact minted Neon blueprint (bespoke exceptions included)
+  var neonDeck = [], neonCursor = -1;
   var TRAIT_SLOTS = [];         // non-skin trait slots, paint order
   var state = {};
   var rows = {};                // slot -> Row
@@ -96,12 +124,317 @@
 
   function stateIdFor(slot) { return state[slot]; }
 
+  function copyState(from) {
+    var out = {};
+    Object.keys(DEFAULT_STATE).forEach(function (key) { out[key] = from[key]; });
+    return out;
+  }
+
+  function restoreState(from) {
+    Object.keys(DEFAULT_STATE).forEach(function (key) { state[key] = from[key]; });
+  }
+
+  function baseOf(id) {
+    return !id || id === "none" ? "none" : id.split("$", 1)[0];
+  }
+
+  function titleWords(value) {
+    return value.replace(/_to_/g, " → ").replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  function parseNeonVariant(value, slot) {
+    value = slot === "skin" ? value.split("@", 1)[0].split("$", 2)[1] : value.split("$neon_", 2)[1];
+    var bloom = null;
+    var bm = value.match(/_b(\d+)$/);
+    if (bm) { bloom = Number(bm[1]); value = value.slice(0, bm.index); }
+    var light = 0;
+    var lm = value.match(/_l(\d+)$/);
+    if (lm) { light = Number(lm[1]); value = value.slice(0, lm.index); }
+    return { palette: value, light: light, bloom: bloom };
+  }
+
+  function skinLayerId(id) { return id.split("@", 1)[0]; }
+
+  function recipeIndexFromSkin(id) {
+    var at = id.lastIndexOf("@");
+    return at === -1 ? 0 : Number(id.slice(at + 1));
+  }
+
+  function currentRecipe() {
+    return NEON && NEON.allowedRecipes[recipeIndexFromSkin(state.skin)];
+  }
+
+  function recipeAccentColors(recipe) {
+    // Monochrome recipes omit an accent list; accessories use the body colour.
+    return recipe.accents.length ? recipe.accents : [recipe.skin];
+  }
+
+  function recipeLabel(recipe) {
+    var accents = recipeAccentColors(recipe).map(titleWords).join(" + ");
+    return titleWords(recipe.skin) + " · " + accents;
+  }
+
+  function buildNeonIndex() {
+    neonIndex = {};
+    neonSkinOptions = null;
+    Object.keys(NEON.layers).forEach(function (slot) {
+      neonIndex[slot] = Object.keys(NEON.layers[slot]).map(function (value) {
+        var parsed = parseNeonVariant(value, slot);
+        return {
+          id: value,
+          value: value,
+          base: baseOf(value),
+          palette: parsed.palette,
+          light: parsed.light,
+          bloom: parsed.bloom,
+          cell: NEON.layers[slot][value],
+          slot: slot,
+          neon: true
+        };
+      });
+    });
+  }
+
+  function setNeonButton(mode) {
+    var button = document.getElementById("btn-neon-build");
+    if (!button) return;
+    var bench = document.getElementById("bench");
+    document.body.classList.toggle("neon-loading", mode === "loading");
+    if (bench) {
+      bench.inert = mode === "loading";
+      if (mode === "loading") bench.setAttribute("aria-busy", "true");
+      else bench.removeAttribute("aria-busy");
+    }
+    var random = document.getElementById("btn-random");
+    if (random && lockedSerial == null) {
+      random.textContent = mode === "active" ? "Randomize Neon" : "Randomize all";
+      random.title = mode === "active" ? "Build another rule-compatible Neon" : "Randomize a classic ghost";
+    }
+    button.disabled = mode === "loading";
+    button.setAttribute("aria-pressed", mode === "active" ? "true" : "false");
+    if (mode === "loading") {
+      button.textContent = "Loading Neon…";
+      button.setAttribute("aria-busy", "true");
+      button.title = "Loading the Neon trait atlas";
+    } else if (mode === "active") {
+      button.textContent = "Classic builder";
+      button.removeAttribute("aria-busy");
+      button.title = "Return to the classic Ghostmaker";
+    } else if (mode === "error") {
+      button.textContent = "Retry Neon lab";
+      button.removeAttribute("aria-busy");
+      button.title = "The Neon atlas did not load; retry without leaving the classic builder";
+    } else {
+      button.textContent = "Build any Neon";
+      button.removeAttribute("aria-busy");
+      button.title = "Build with every generated Neon layer inside the curated palette and compatibility rules";
+    }
+  }
+
+  function ensureNeonLoaded() {
+    if (NEON && neonAtlas) return Promise.resolve(NEON);
+    if (neonLoad) return neonLoad;
+    setNeonButton("loading");
+    neonLoad = fetch(NEON_URL).then(function (r) {
+      if (!r.ok) throw new Error("Neon builder data " + r.status);
+      return r.json();
+    }).then(function (data) {
+      return loadImg(data.atlas).then(function (atlas) {
+        NEON = data;
+        neonAtlas = atlas;
+        buildNeonIndex();
+        setNeonButton("idle");
+        return data;
+      });
+    }).catch(function (err) {
+      neonLoad = null;
+      NEON = null;
+      neonAtlas = null;
+      neonIndex = {};
+      neonSkinOptions = null;
+      setNeonButton("error");
+      throw err;
+    });
+    return neonLoad;
+  }
+
+  function findNeonLayer(slot, base, palette, light) {
+    var list = neonIndex[slot] || [];
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (item.base === base && item.palette === palette && item.light === light) return item.value;
+    }
+    return null;
+  }
+
+  function neonLayerValue(slot, id) {
+    return slot === "skin" ? skinLayerId(id) : id;
+  }
+
+  function neonCell(slot, id) {
+    var value = neonLayerValue(slot, id);
+    return NEON.layers[slot] && NEON.layers[slot][value];
+  }
+
+  function drawAtlasCell(ctx, cell, dx, dy, dw, dh, crop) {
+    var sx = (cell % NEON.columns) * NEON.cell;
+    var sy = Math.floor(cell / NEON.columns) * NEON.cell;
+    if (crop) {
+      ctx.drawImage(neonAtlas, sx + crop.x, sy + crop.y, crop.w, crop.h, dx, dy, dw, dh);
+    } else {
+      ctx.drawImage(neonAtlas, sx, sy, NEON.cell, NEON.cell, dx, dy, dw, dh);
+    }
+  }
+
+  function neonBounds(cell) {
+    if (neonBoundsCache.has(cell)) return neonBoundsCache.get(cell);
+    var cv = document.createElement("canvas");
+    cv.width = NEON.cell; cv.height = NEON.cell;
+    var ctx = cv.getContext("2d", { willReadFrequently: true });
+    drawAtlasCell(ctx, cell, 0, 0, NEON.cell, NEON.cell);
+    var data = ctx.getImageData(0, 0, NEON.cell, NEON.cell).data;
+    var minX = NEON.cell, minY = NEON.cell, maxX = -1, maxY = -1;
+    for (var y = 0; y < NEON.cell; y++) {
+      for (var x = 0; x < NEON.cell; x++) {
+        if (data[(y * NEON.cell + x) * 4 + 3] > 8) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    var bounds = maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+    neonBoundsCache.set(cell, bounds);
+    return bounds;
+  }
+
+  function exitMintedMode() {
+    if (lockedSerial == null) return false;
+    lockedSerial = null;
+    neonCursor = -1;
+    document.body.classList.remove("minted-neon");
+    document.querySelectorAll(".rowmeta, .chip, .rowcount").forEach(function (el) {
+      el.inert = false;
+      el.removeAttribute("aria-hidden");
+    });
+    var btn = document.getElementById("btn-neon");
+    if (btn) btn.textContent = "Minted Neon · #9314";
+    var random = document.getElementById("btn-random");
+    if (random) { random.textContent = "Randomize all"; random.title = "Randomize a classic ghost"; }
+    var reset = document.getElementById("btn-reset");
+    if (reset) { reset.textContent = "Reset"; reset.title = "Reset to ghost #1"; }
+    return true;
+  }
+
+  function leaveNeonMode() {
+    if (!neonMode) return false;
+    neonMode = false;
+    document.body.classList.remove("neon-builder");
+    setNeonButton("idle");
+    if (classicState) restoreState(classicState);
+    classicState = null;
+    return true;
+  }
+
+  function defaultNeonState() {
+    var wanted = "purple_to_cyan|cyan,purple";
+    var recipeIndex = NEON.allowedRecipes.findIndex(function (recipe) { return recipe.key === wanted; });
+    if (recipeIndex < 0) recipeIndex = 0;
+    var recipe = NEON.allowedRecipes[recipeIndex];
+    var skins = neonIndex.skin.filter(function (item) { return item.palette === recipe.skin; });
+    var skin = skins.filter(function (item) { return item.light === 20 && item.bloom === 40; })[0] || skins[0];
+    var body = parseNeonVariant(skin.value, "skin");
+    return {
+      bg: "starlight",
+      skin: skin.value + "@" + recipeIndex,
+      propulsion: "none",
+      hand_left: "none",
+      eyes: findNeonLayer("eyes", "expression_eyes", body.palette, body.light),
+      mouth: findNeonLayer("mouth", "expression_mouth", body.palette, body.light),
+      head: "none",
+      hand_right: findNeonLayer("hand_right", "gesture_relaxed", body.palette, body.light)
+    };
+  }
+
+  function toggleNeonBuilder() {
+    clearFx();
+    if (neonMode) {
+      leaveNeonMode();
+      syncRows();
+      render(true);
+      pushLog([{ t: "classic trait vault restored" }]);
+      return;
+    }
+    if (!NEON || !neonAtlas) {
+      var request = ++neonOpenRequest;
+      pushLog([{ t: "opening Neon vault — loading 4,400 generated layers" }]);
+      ensureNeonLoaded().then(function () {
+        if (request === neonOpenRequest && !neonMode) toggleNeonBuilder();
+      }).catch(function (err) {
+        console.error("[ghostmaker neon init]", err);
+        pushLog([{ t: "Neon atlas did not load — classic builder is still ready · tap retry", warn: true }]);
+      });
+      return;
+    }
+    exitMintedMode();
+    classicState = copyState(state);
+    neonMode = true;
+    document.body.classList.add("neon-builder");
+    restoreState(defaultNeonState());
+    setNeonButton("active");
+    syncRows();
+    render(true);
+    pushLog([{ t: "Neon lab open — 98 curated recipes · unlisted colour combinations stay blocked" }]);
+  }
+
+  function nextMintedNeon() {
+    if (!neonDeck.length) return;
+    neonOpenRequest++;
+    clearFx();
+    leaveNeonMode();
+    neonCursor = (neonCursor + 1) % neonDeck.length;
+    lockedSerial = neonDeck[neonCursor];
+    document.body.classList.add("minted-neon");
+    var btn = document.getElementById("btn-neon");
+    if (btn) btn.textContent = "Next Minted Neon · #" + lockedSerial;
+    var random = document.getElementById("btn-random");
+    if (random) { random.textContent = "Randomize classic"; random.title = "Leave this minted preset and randomize a classic ghost"; }
+    // `leaveNeonMode()` restores the classic state, so also rebuild every
+    // shelf's option deck before those shelves become interactive again.
+    syncRows();
+    document.querySelectorAll(".rowmeta, .chip, .rowcount").forEach(function (el) {
+      el.inert = true;
+      el.setAttribute("aria-hidden", "true");
+    });
+    var reset = document.getElementById("btn-reset");
+    if (reset) { reset.textContent = "Return to classic"; reset.title = "Leave the minted preset and return to ghost #1"; }
+    render(true);
+    pushLog([{ t: "ghost #" + lockedSerial + " — exact minted Neon · cycle it, build any Neon, or return to classic" }]);
+  }
+
   function skinLabel(id) {
+    if (neonMode) {
+      var meta = parseNeonVariant(id, "skin");
+      var recipe = NEON.allowedRecipes[recipeIndexFromSkin(id)];
+      return recipeLabel(recipe) + " · L" + meta.light + " · Glow " + meta.bloom;
+    }
     for (var i = 0; i < G.skins.length; i++) if (G.skins[i].id === id) return G.skins[i].label;
     return id;
   }
 
   function traitLabel(slot, base) {
+    if (neonMode) {
+      if (base === "none") return "None";
+      if (slot === "bg") {
+        var nb = NEON.backgrounds.filter(function (item) { return item.id === base; })[0];
+        return nb ? nb.label : titleWords(base);
+      }
+      if (slot === "skin") return skinLabel(base);
+      var parsed = parseNeonVariant(base, slot);
+      var label = (G.traits[slot][baseOf(base)] || {}).label || titleWords(baseOf(base));
+      return label + " · " + titleWords(parsed.palette) + " L" + parsed.light;
+    }
     if (slot === "bg") {
       for (var i = 0; i < G.backgrounds.length; i++) if (G.backgrounds[i].id === base) return G.backgrounds[i].label;
       return base;
@@ -112,6 +445,11 @@
   }
 
   function currentFile(slot) {
+    if (neonMode) {
+      if (slot !== "bg") return null;
+      var bg = NEON.backgrounds.filter(function (item) { return item.id === state.bg; })[0];
+      return bg ? bg.file : null;
+    }
     if (slot === "bg") {
       for (var i = 0; i < G.backgrounds.length; i++) if (G.backgrounds[i].id === state.bg) return G.backgrounds[i].file;
       return null;
@@ -137,7 +475,80 @@
     return false;
   }
 
+  function neonOptionsFor(slot) {
+    if (slot === "bg") {
+      return NEON.backgrounds.map(function (item) {
+        return { id: item.id, label: item.label, slot: "bg", file: item.file, minted: 0, neon: true, variant: "Neon backdrop" };
+      });
+    }
+    if (slot === "skin") {
+      if (neonSkinOptions) return neonSkinOptions;
+      var skins = [];
+      NEON.allowedRecipes.forEach(function (recipe, recipeIndex) {
+        neonIndex.skin.forEach(function (item) {
+          if (item.palette !== recipe.skin) return;
+          skins.push({
+            id: item.value + "@" + recipeIndex,
+            value: item.value,
+            label: titleWords(recipe.skin),
+            slot: "skin",
+            cell: item.cell,
+            neon: true,
+            recipeIndex: recipeIndex,
+            light: item.light,
+            bloom: item.bloom,
+            preferred: recipe.preferred,
+            variant: (recipe.preferred ? "Preferred · " : "") +
+              "Accents " + recipeAccentColors(recipe).map(titleWords).join(" + ") +
+              " · L" + item.light + " · Glow " + item.bloom
+          });
+        });
+      });
+      neonSkinOptions = skins;
+      return neonSkinOptions;
+    }
+
+    var skinMeta = parseNeonVariant(state.skin, "skin");
+    var recipe = currentRecipe();
+    var accentSet = new Set(recipeAccentColors(recipe));
+    var bodySet = new Set(NEON.bodyBases[slot] || []);
+    var accentBases = new Set(NEON.accentBases[slot] || []);
+    var out = [];
+    // Keep a rule-forced empty state selectable/current (the skull mask's
+    // mouth), while still preventing users from making required slots empty.
+    if (!slotRequired(slot) || state[slot] === "none") {
+      out.push({ id: "none", label: "None", slot: slot, file: null, minted: 0, neon: true, variant: "Empty" });
+    }
+    (neonIndex[slot] || []).forEach(function (item) {
+      var body = bodySet.has(item.base);
+      var accent = accentBases.has(item.base);
+      if (body && (item.palette !== skinMeta.palette || item.light !== skinMeta.light)) return;
+      if (accent && !accentSet.has(item.palette)) return;
+      if (!body && !accent) return;
+      var label = (G.traits[slot][item.base] || {}).label || titleWords(item.base);
+      out.push({
+        id: item.value,
+        value: item.value,
+        label: label,
+        slot: slot,
+        cell: item.cell,
+        neon: true,
+        base: item.base,
+        palette: item.palette,
+        light: item.light,
+        variant: titleWords(item.palette) + " · L" + item.light + (body ? " · Body-lit" : " · Curated accent")
+      });
+    });
+    out.sort(function (a, b) {
+      if (a.id === "none") return -1;
+      if (b.id === "none") return 1;
+      return a.label.localeCompare(b.label) || a.variant.localeCompare(b.variant);
+    });
+    return out;
+  }
+
   function optionsFor(slot, skin) {
+    if (neonMode) return neonOptionsFor(slot);
     skin = skin || state.skin;
     if (slot === "bg") {
       return G.backgrounds.map(function (b) { return { id: b.id, label: b.label, slot: "bg", file: b.file, minted: 0 }; });
@@ -185,6 +596,12 @@
   // most-common eligible option for a required slot, avoiding one base
   function requiredFallback(slot, notBase) {
     var opts = optionsFor(slot);
+    if (neonMode) {
+      var preferred = slot === "eyes" ? "expression_eyes" : (slot === "mouth" ? "expression_mouth" : "gesture_relaxed");
+      for (var ni = 0; ni < opts.length; ni++) {
+        if (baseOf(opts[ni].id) === preferred && baseOf(opts[ni].id) !== notBase) return opts[ni].id;
+      }
+    }
     for (var i = 0; i < opts.length; i++) if (opts[i].id !== notBase) return opts[i].id;
     return "none";
   }
@@ -204,7 +621,7 @@
     this.meta.setAttribute("role", "group");
     this.meta.innerHTML =
       '<div class="rowtext"><span class="rowname">' + SLOT_LABEL[slot] + '</span>' +
-      '<span class="rowval" aria-live="polite"></span></div>' +
+      '<span class="rowval"></span></div>' +
       '<button class="browse" aria-label="Browse all ' + SLOT_LABEL[slot].toLowerCase() + ' parts" title="Browse all ' + SLOT_LABEL[slot].toLowerCase() + ' parts">⌕</button>' +
       '<button class="dice" aria-label="Random ' + SLOT_LABEL[slot].toLowerCase() + '" title="Random ' + SLOT_LABEL[slot].toLowerCase() + '">⚄</button>';
     this.val = this.meta.querySelector(".rowval");
@@ -217,6 +634,9 @@
       openPicker(slot);
     });
     this.meta.addEventListener("keydown", function (e) {
+      // Let the nested Browse and Random buttons keep their native keyboard
+      // behavior; the conveyor shortcuts belong to the row group itself.
+      if (e.target !== self.meta) return;
       if (e.key === "ArrowLeft") { e.preventDefault(); self.step(-1); }
       if (e.key === "ArrowRight") { e.preventDefault(); self.step(1); }
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPicker(slot); }
@@ -264,6 +684,7 @@
     var drag = null;
     el.addEventListener("pointerdown", function (e) {
       if (e.button !== 0 && e.pointerType === "mouse") return;
+      if (el === self.meta && e.target.closest && e.target.closest("button")) return;
       // capture to the element the press started on: captured moves still
       // bubble up to this handler, and the eventual click stays on the
       // pressed button (capturing to the container would steal it)
@@ -319,12 +740,16 @@
       ". Arrow keys change it; Enter browses all parts.");
     this.meta.title = "Browse all " + SLOT_LABEL[this.slot].toLowerCase() + " parts";
     var minted = 0;
-    if (this.slot === "skin") {
+    if (neonMode) {
+      this.count.textContent = this.slot === "skin"
+        ? "curated palette recipe"
+        : (cur === "none" ? "" : "eligible Neon layer");
+    } else if (this.slot === "skin") {
       minted = (G.skins.filter(function (s) { return s.id === cur; })[0] || {}).minted || 0;
     } else if (this.slot !== "bg" && cur !== "none" && G.traits[this.slot][cur]) {
       minted = G.traits[this.slot][cur].minted;
     }
-    this.count.textContent = minted ? num(minted) + " minted" : (cur === "none" ? "" : (this.slot === "bg" ? "" : "vault only"));
+    if (!neonMode) this.count.textContent = minted ? num(minted) + " minted" : (cur === "none" ? "" : (this.slot === "bg" ? "" : "vault only"));
     this.paintChip(this.prevChip, this.neighbor(-1), "previous");
     this.paintChip(this.nextChip, this.neighbor(1), "next");
   };
@@ -341,8 +766,20 @@
       noneEl.style.display = "none";
       return;
     }
-    chip.setAttribute("aria-label", "Put on " + word + " " + SLOT_LABEL[this.slot].toLowerCase() + ": " + opt.label);
-    chip.title = "Put on " + opt.label;
+    var detail = opt.neon && opt.variant ? " — " + opt.variant : "";
+    chip.setAttribute("aria-label", "Put on " + word + " " + SLOT_LABEL[this.slot].toLowerCase() + ": " + opt.label + detail);
+    chip.title = "Put on " + opt.label + detail;
+    if (opt.neon && opt.cell != null) {
+      noneEl.style.display = "none";
+      cv.style.display = "";
+      var bb = neonBounds(opt.cell);
+      if (!bb) return;
+      var ns = chipScaleFor(bb);
+      var ndw = bb.w * ns, ndh = bb.h * ns;
+      ctx.imageSmoothingEnabled = false;
+      drawAtlasCell(ctx, opt.cell, (CHIP_ART - ndw) / 2, (CHIP_ART - ndh) / 2, ndw, ndh, bb);
+      return;
+    }
     if (!opt.file || opt.id === "none") {
       noneEl.style.display = "";
       cv.style.display = "none";
@@ -435,7 +872,7 @@
             ? aLab + " leaves no room for " + SLOT_LABEL[B].toLowerCase() + " — cleared"
             : aLab + " comes as a pair — " + SLOT_LABEL[B].toLowerCase() + " matched" });
         } else {
-          state[A] = REQUIRED[A] ? requiredFallback(A, a) : "none";
+          state[A] = slotRequired(A) ? requiredFallback(A, a) : "none";
           touched[A] = true;
           msgs.push({ t: b === "none"
             ? aLab + " needs an empty " + SLOT_LABEL[B].toLowerCase() + " — removed"
@@ -460,8 +897,123 @@
     });
   }
 
-  function userSet(slot, id, dirHint) {
+  function sameNeonStyle(a, b, slotA, slotB) {
+    if (!a || !b || a === "none" || b === "none") return false;
+    var ma = parseNeonVariant(a, slotA);
+    var mb = parseNeonVariant(b, slotB);
+    return ma.palette === mb.palette && ma.light === mb.light;
+  }
+
+  function matchingNeonPartner(slot, base, sourceId, sourceSlot) {
+    var style = parseNeonVariant(sourceId, sourceSlot);
+    return findNeonLayer(slot, base, style.palette, style.light);
+  }
+
+  function applyNeonRules(msgs, changed) {
+    var touched = {};
+    if (changed) touched[changed] = true;
+    var reqs = (NEON.rules && NEON.rules.requires) || [];
+    var ordered = reqs.slice().sort(function (x, y) {
+      return (x["if"][0] === changed ? 0 : 1) - (y["if"][0] === changed ? 0 : 1);
+    });
+
+    for (var pass = 0; pass < 4; pass++) {
+      var moved = false;
+      for (var i = 0; i < ordered.length; i++) {
+        var rule = ordered[i];
+        var A = rule["if"][0], a = rule["if"][1], B = rule.then[0], b = rule.then[1];
+        if (baseOf(state[A]) !== a) continue;
+        var satisfied = b === "none"
+          ? baseOf(state[B]) === "none"
+          : baseOf(state[B]) === b && (!rule.matchStyle || sameNeonStyle(state[A], state[B], A, B));
+        if (satisfied) continue;
+
+        var genericPartner = optionsFor(B).filter(function (option) { return baseOf(option.id) === b; })[0];
+        var target = b === "none" ? "none" : (rule.matchStyle
+          ? matchingNeonPartner(B, b, state[A], A)
+          : (genericPartner && genericPartner.id));
+        var canSet = target && (target === "none" || availableNow(B, target));
+        if (canSet && B !== changed && (!touched[B] || baseOf(state[B]) === "none")) {
+          state[B] = target;
+          touched[B] = true;
+          msgs.push({ t: b === "none"
+            ? traitLabel(A, state[A]) + " leaves no room for " + SLOT_LABEL[B].toLowerCase() + " — cleared"
+            : traitLabel(A, state[A]) + " comes as a colour-matched pair" });
+        } else {
+          state[A] = slotRequired(A) ? requiredFallback(A, a) : "none";
+          touched[A] = true;
+          msgs.push({ t: titleWords(a) + " lost its required match — removed", warn: true });
+        }
+        moved = true;
+      }
+      if (!moved) break;
+    }
+
+    (NEON.rules.required || ["eyes", "mouth", "hand_right"]).forEach(function (slot) {
+      if (baseOf(state[slot]) !== "none") return;
+      var forced = reqs.some(function (rule) {
+        return rule.then[0] === slot && rule.then[1] === "none" && baseOf(state[rule["if"][0]]) === rule["if"][1];
+      });
+      if (!forced) state[slot] = requiredFallback(slot, null);
+    });
+  }
+
+  function reconcileNeonForSkin(msgs) {
+    var skin = parseNeonVariant(state.skin, "skin");
+    var accents = new Set(recipeAccentColors(currentRecipe()));
+    TRAIT_SLOTS.forEach(function (slot) {
+      var id = state[slot];
+      if (!id || id === "none") return;
+      var base = baseOf(id);
+      if ((NEON.bodyBases[slot] || []).indexOf(base) !== -1) {
+        state[slot] = findNeonLayer(slot, base, skin.palette, skin.light) || "none";
+        return;
+      }
+      if ((NEON.accentBases[slot] || []).indexOf(base) !== -1) {
+        var style = parseNeonVariant(id, slot);
+        if (accents.has(style.palette) && findNeonLayer(slot, base, style.palette, style.light)) return;
+        var next = null;
+        recipeAccentColors(currentRecipe()).some(function (palette) {
+          next = findNeonLayer(slot, base, palette, style.light) || findNeonLayer(slot, base, palette, 0);
+          return !!next;
+        });
+        state[slot] = next || "none";
+        msgs.push({ t: titleWords(base) + " recoloured to stay inside the curated palette" });
+        return;
+      }
+      state[slot] = "none";
+    });
+  }
+
+  function neonUserSet(slot, id) {
     if (state[slot] === id) return;
+    clearFx();
+    var msgs = [];
+    if (!availableNow(slot, id)) {
+      pushLog([{ t: "blocked — that Neon part is outside the active curated recipe", warn: true }]);
+      return;
+    }
+    state[slot] = id;
+    if (slot === "skin") {
+      reconcileNeonForSkin(msgs);
+      msgs.unshift({ t: "curated palette — " + recipeLabel(currentRecipe()) });
+    }
+    applyNeonRules(msgs, slot);
+    syncRows();
+    render(true);
+    pushLog(msgs);
+  }
+
+  function userSet(slot, id, dirHint) {
+    if (neonMode) {
+      neonUserSet(slot, id);
+      return;
+    }
+    var leftMinted = exitMintedMode();
+    if (state[slot] === id) {
+      if (leftMinted) render(true);
+      return;
+    }
     clearFx();
     var prev = snapshotLayers();
     var msgs = [];
@@ -493,6 +1045,9 @@
   var renderToken = 0;
   function layerUrls(excludeSlots) {
     function skip(s) { return excludeSlots && excludeSlots.indexOf(s) !== -1; }
+    if (lockedSerial != null) {
+      return [skip("bg") ? "/sprites/" + lockedSerial + ".webp" : "/art141/" + lockedSerial + ".png"];
+    }
     var urls = [];
     var bgf = currentFile("bg");
     if (bgf && !skip("bg")) urls.push(assetUrl("bg", bgf));
@@ -505,15 +1060,72 @@
     return urls;
   }
 
+  function neonBackgroundFile(id) {
+    var bg = NEON.backgrounds.filter(function (item) { return item.id === id; })[0];
+    return bg ? bg.file : null;
+  }
+
+  // Build into an offscreen canvas from an immutable state snapshot. This
+  // keeps an older background request from painting over a newer render when
+  // someone flicks quickly or changes builder modes mid-load.
+  function composeNeonCanvas(size, includeBg, excludeSlots, sourceState) {
+    function skip(slot) { return excludeSlots && excludeSlots.indexOf(slot) !== -1; }
+    var frame = document.createElement("canvas");
+    frame.width = size; frame.height = size;
+    var ctx = frame.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    var bgFile = neonBackgroundFile(sourceState.bg);
+    var bgReady = includeBg && !skip("bg") && bgFile
+      ? loadImg(assetUrl("bg", bgFile))
+      : Promise.resolve(null);
+    return bgReady.then(function (bg) {
+      if (bg) ctx.drawImage(bg, 0, 0, size, size);
+      (NEON.paintOrder || NEON_PAINT_ORDER).forEach(function (slot) {
+        if (skip(slot) || sourceState[slot] === "none") return;
+        var cell = neonCell(slot, sourceState[slot]);
+        if (cell == null) throw new Error("missing Neon atlas cell: " + slot + "/" + sourceState[slot]);
+        drawAtlasCell(ctx, cell, 0, 0, size, size);
+      });
+      return frame;
+    });
+  }
+
   function render(pop, excludeSlots) {
     var t = ++renderToken;
+    if (neonMode) {
+      var neonState = copyState(state);
+      return composeNeonCanvas(47, !excludeSlots || excludeSlots.indexOf("bg") === -1, excludeSlots, neonState).then(function (frame) {
+        if (t !== renderToken || !neonMode) return;
+        var ncv = document.getElementById("ghost");
+        var nctx = ncv.getContext("2d");
+        nctx.clearRect(0, 0, 47, 47);
+        nctx.imageSmoothingEnabled = false;
+        nctx.drawImage(frame, 0, 0);
+        var miniNeon = document.getElementById("mini");
+        if (miniNeon) {
+          var miniCtx = miniNeon.getContext("2d");
+          miniCtx.clearRect(0, 0, 47, 47);
+          miniCtx.drawImage(ncv, 0, 0);
+        }
+        if (pop) {
+          var floater = document.getElementById("floater");
+          floater.classList.remove("pop");
+          void floater.offsetWidth;
+          floater.classList.add("pop");
+        }
+        updateUnit();
+      }).catch(function (err) {
+        console.error("[ghostmaker neon]", err);
+        if (t === renderToken) pushLog([{ t: "a Neon layer failed to load — flick again to retry", warn: true }]);
+      });
+    }
     var urls = layerUrls(excludeSlots);
     return Promise.all(urls.map(loadImg)).then(function (imgs) {
       if (t !== renderToken) return;
       var cv = document.getElementById("ghost");
       var ctx = cv.getContext("2d");
       ctx.clearRect(0, 0, 47, 47);
-      imgs.forEach(function (im) { ctx.drawImage(im, 0, 0); });
+      imgs.forEach(function (im) { ctx.drawImage(im, 0, 0, 47, 47); });
       var mini = document.getElementById("mini");
       if (mini) {
         var mctx = mini.getContext("2d");
@@ -648,6 +1260,7 @@
   var picker = null;
 
   function variantOf(slot, opt) {
+    if (opt.variant) return opt.variant;
     if (!opt.file) return "base";
     var m = opt.file.match(/__([a-z0-9_]+)\.png$/);
     return m ? m[1].replace(/_/g, " ") : "base";
@@ -663,11 +1276,22 @@
           '<div><span class="microlabel" id="gm-picker-micro"></span><h2 id="gm-picker-title"></h2></div>' +
           '<button class="picker-close" type="button" aria-label="Close part browser">×</button>' +
         "</header>" +
-        '<div class="gm-search-block">' +
-          '<label class="trait-search"><span>SEARCH PARTS</span>' +
-          '<input type="search" autocomplete="off" placeholder="Try crown, glasses, coffee, gold…"></label>' +
-          '<div class="search-meta"><span id="gm-picker-status" role="status" aria-live="polite"></span>' +
-          '<button type="button" class="gm-clear" hidden>CLEAR</button></div>' +
+        '<div class="picker-tools">' +
+          '<div class="gm-search-block">' +
+            '<label class="trait-search"><span id="gm-search-label">SEARCH PARTS</span>' +
+            '<input type="search" autocomplete="off" placeholder="Try crown, glasses, coffee, gold…"></label>' +
+            '<div class="search-meta"><span id="gm-picker-status" role="status" aria-live="polite"></span>' +
+            '<button type="button" class="gm-clear" hidden>CLEAR</button></div>' +
+          '</div>' +
+          '<div class="neon-skin-controls" id="gm-neon-skin-controls" hidden>' +
+            '<div class="neon-choice" role="group" aria-label="Body light">' +
+              '<span>BODY LIGHT</span><button type="button" data-neon-light="0">L0</button><button type="button" data-neon-light="20">L20</button>' +
+              '<button type="button" data-neon-light="40">L40</button><button type="button" data-neon-light="60">L60</button><button type="button" data-neon-light="80">L80</button>' +
+            '</div>' +
+            '<div class="neon-choice" role="group" aria-label="Body glow">' +
+              '<span>GLOW</span><button type="button" data-neon-bloom="0">0</button><button type="button" data-neon-bloom="40">40</button>' +
+            '</div>' +
+          '</div>' +
         "</div>" +
         '<div class="trait-browser-grid" id="gm-picker-grid"></div>' +
         '<div class="picker-empty" id="gm-picker-empty" hidden></div>' +
@@ -681,13 +1305,21 @@
       sheet: backdrop.querySelector(".picker-sheet"),
       micro: backdrop.querySelector("#gm-picker-micro"),
       title: backdrop.querySelector("#gm-picker-title"),
+      searchLabel: backdrop.querySelector("#gm-search-label"),
       input: backdrop.querySelector("input"),
       status: backdrop.querySelector("#gm-picker-status"),
       clear: backdrop.querySelector(".gm-clear"),
       grid: backdrop.querySelector("#gm-picker-grid"),
       empty: backdrop.querySelector("#gm-picker-empty"),
+      skinControls: backdrop.querySelector("#gm-neon-skin-controls"),
+      lightButtons: backdrop.querySelectorAll("[data-neon-light]"),
+      bloomButtons: backdrop.querySelectorAll("[data-neon-bloom]"),
+      skinLight: 0,
+      skinBloom: 0,
       slot: null,
-      prevFocus: null
+      prevFocus: null,
+      prevOverflow: "",
+      inerted: []
     };
     backdrop.addEventListener("mousedown", function (e) {
       if (e.target === backdrop) closePicker();
@@ -695,13 +1327,38 @@
     backdrop.querySelector(".picker-close").addEventListener("click", closePicker);
     backdrop.querySelector(".gm-cancel").addEventListener("click", closePicker);
     picker.input.addEventListener("input", renderPickerGrid);
+    Array.prototype.forEach.call(picker.lightButtons, function (button) {
+      button.addEventListener("click", function () {
+        picker.skinLight = Number(button.getAttribute("data-neon-light"));
+        applyPickerSkinStyle();
+      });
+    });
+    Array.prototype.forEach.call(picker.bloomButtons, function (button) {
+      button.addEventListener("click", function () {
+        picker.skinBloom = Number(button.getAttribute("data-neon-bloom"));
+        applyPickerSkinStyle();
+      });
+    });
     picker.clear.addEventListener("click", function () {
       picker.input.value = "";
       renderPickerGrid();
       picker.input.focus();
     });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && picker.el.style.display !== "none") closePicker();
+      if (picker.el.style.display === "none") return;
+      if (e.key === "Escape") { closePicker(); return; }
+      if (e.key !== "Tab") return;
+      var focusable = Array.prototype.filter.call(
+        picker.sheet.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+        function (el) { return !el.hidden && el.offsetParent !== null; }
+      );
+      if (!focusable.length) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !picker.sheet.contains(document.activeElement))) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
     });
     return picker;
   }
@@ -710,25 +1367,82 @@
     ensurePicker();
     picker.slot = slot;
     picker.prevFocus = document.activeElement;
-    picker.title.textContent = SLOT_LABEL[slot];
+    var neonSkin = neonMode && slot === "skin";
+    picker.el.classList.toggle("neon-skin-picker", neonSkin);
+    picker.title.textContent = neonSkin ? "Neon recipe" : SLOT_LABEL[slot];
+    picker.searchLabel.textContent = neonSkin ? "SEARCH RECIPES" : "SEARCH PARTS";
+    picker.input.placeholder = neonSkin
+      ? "Try purple cyan, orange accent, preferred…"
+      : "Try crown, glasses, coffee, gold…";
+    picker.skinControls.hidden = !neonSkin;
+    if (neonSkin) {
+      var skinStyle = parseNeonVariant(state.skin, "skin");
+      picker.skinLight = skinStyle.light;
+      picker.skinBloom = skinStyle.bloom;
+    }
     picker.input.value = "";
     picker.el.style.display = "flex";
+    picker.sheet.scrollTop = 0;
+    picker.prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    picker.inerted = [];
+    Array.prototype.forEach.call(document.body.children, function (el) {
+      if (el === picker.el || el.inert) return;
+      el.inert = true;
+      picker.inerted.push(el);
+    });
     renderPickerGrid();
+    if (neonSkin) {
+      setTimeout(function () {
+        var current = picker.grid.querySelector(".current");
+        if (current) current.scrollIntoView({ block: "nearest" });
+      }, 0);
+    }
     setTimeout(function () { picker.input.focus(); }, 0);
   }
 
   function closePicker() {
     if (!picker || picker.el.style.display === "none") return;
     picker.el.style.display = "none";
-    document.body.style.overflow = "";
+    document.body.style.overflow = picker.prevOverflow;
+    picker.inerted.forEach(function (el) { el.inert = false; });
+    picker.inerted = [];
     if (picker.prevFocus && picker.prevFocus.focus) picker.prevFocus.focus();
+  }
+
+  function applyPickerSkinStyle() {
+    var recipeIndex = recipeIndexFromSkin(state.skin);
+    var target = neonOptionsFor("skin").filter(function (option) {
+      return option.recipeIndex === recipeIndex && option.light === picker.skinLight && option.bloom === picker.skinBloom;
+    })[0];
+    if (target && target.id !== state.skin) neonUserSet("skin", target.id);
+    renderPickerGrid();
   }
 
   function renderPickerGrid() {
     var slot = picker.slot;
     var opts = optionsFor(slot);
-    picker.micro.textContent = "OFFICIAL DEAD PIXELS ART · " + opts.length + " ELIGIBLE FOR " + skinLabel(state.skin).toUpperCase();
+    var neonSkin = neonMode && slot === "skin";
+    if (neonSkin) {
+      // A recipe card plus these two compact controls represents the same
+      // ten body variants that used to appear as ten near-identical cards.
+      opts = opts.filter(function (option) {
+        return option.light === picker.skinLight && option.bloom === picker.skinBloom;
+      }).sort(function (a, b) {
+        return Number(b.preferred) - Number(a.preferred) || a.recipeIndex - b.recipeIndex;
+      });
+      Array.prototype.forEach.call(picker.lightButtons, function (button) {
+        button.setAttribute("aria-pressed", Number(button.getAttribute("data-neon-light")) === picker.skinLight ? "true" : "false");
+      });
+      Array.prototype.forEach.call(picker.bloomButtons, function (button) {
+        button.setAttribute("aria-pressed", Number(button.getAttribute("data-neon-bloom")) === picker.skinBloom ? "true" : "false");
+      });
+    }
+    picker.micro.textContent = neonMode
+      ? (slot === "skin"
+        ? "98 CURATED PALETTE RECIPES · 77 PREFERRED · UNLISTED COMBINATIONS BLOCKED"
+        : "OFFICIAL NEON ART · " + opts.length + " ELIGIBLE FOR " + recipeLabel(currentRecipe()).toUpperCase())
+      : "OFFICIAL DEAD PIXELS ART · " + opts.length + " ELIGIBLE FOR " + skinLabel(state.skin).toUpperCase();
     var terms = picker.input.value.toLowerCase().split(/\s+/).filter(Boolean);
     var cur = stateIdFor(slot);
     var shown = opts.filter(function (o) {
@@ -736,20 +1450,29 @@
       var hay = (o.label + " " + variantOf(slot, o) + " " + o.id + " " + (o.file || "")).toLowerCase();
       return terms.every(function (t) { return hay.indexOf(t) !== -1; });
     });
-    picker.status.textContent = shown.length + " MATCHING PART" + (shown.length === 1 ? "" : "S");
+    var noun = neonSkin ? "RECIPE" : "PART";
+    picker.status.textContent = shown.length + " MATCHING " + noun + (shown.length === 1 ? "" : "S");
     picker.clear.hidden = !picker.input.value;
     picker.grid.textContent = "";
     picker.empty.hidden = shown.length > 0;
-    picker.empty.textContent = "NO PARTS MATCH “" + picker.input.value + "”";
+    picker.empty.textContent = "NO " + (neonSkin ? "RECIPES" : "PARTS") + " MATCH “" + picker.input.value + "”";
     shown.forEach(function (o) {
       var btn = document.createElement("button");
       btn.type = "button";
       var v = variantOf(slot, o);
       btn.title = o.label + " · " + v;
+      btn.setAttribute("aria-pressed", o.id === cur ? "true" : "false");
       if (o.id === cur) btn.className = "current";
       var prev = document.createElement("span");
       prev.className = "trait-preview";
-      if (o.file && o.id !== "none") {
+      if (o.neon && o.cell != null) {
+        var pcv = document.createElement("canvas");
+        pcv.width = 47; pcv.height = 47;
+        var pctx = pcv.getContext("2d");
+        pctx.imageSmoothingEnabled = false;
+        drawAtlasCell(pctx, o.cell, 0, 0, 47, 47);
+        prev.appendChild(pcv);
+      } else if (o.file && o.id !== "none") {
         var im = document.createElement("img");
         im.src = assetUrl(slot === "bg" ? "bg" : (slot === "skin" ? "skin" : slot), o.file);
         im.alt = "";
@@ -779,14 +1502,132 @@
   // ---------- readouts ----------------------------------------------------
 
   function unitId() {
-    var s = ROW_ORDER.map(function (k) { return k + ":" + stateIdFor(k); }).join("|");
+    if (lockedSerial != null) return String(lockedSerial);
+    var s = ROW_ORDER.map(function (k) {
+      var id = stateIdFor(k);
+      // Recipe metadata controls future choices but does not change the
+      // rendered skin pixels, so keep visual-identical builds on one ID.
+      if (neonMode && k === "skin") id = skinLayerId(id);
+      return k + ":" + id;
+    }).join("|");
     var h = 2166136261;
     for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
     return ("0000" + (h >>> 16).toString(16).toUpperCase()).slice(-4);
   }
 
   function updateUnit() {
-    document.getElementById("unit").textContent = "UNIT " + unitId();
+    var unit = document.getElementById("unit");
+    unit.textContent = lockedSerial != null
+      ? "GHOST #" + lockedSerial + " · MINTED NEON"
+      : (neonMode ? "NEON " + unitId() + " · CURATED" : "UNIT " + unitId());
+    var ghost = document.getElementById("ghost");
+    if (lockedSerial != null) {
+      ghost.setAttribute("aria-label", "Minted Neon ghost #" + lockedSerial);
+    } else {
+      var summary = ROW_ORDER.map(function (slot) {
+        return SLOT_LABEL[slot] + ": " + traitLabel(slot, stateIdFor(slot));
+      }).join("; ");
+      ghost.setAttribute("aria-label", (neonMode ? "Curated Neon ghost. " : "Assembled ghost. ") + summary);
+    }
+    updateMintBadge();
+  }
+
+  // ---------- circulation check -------------------------------------------
+  // Is the ghost on the bench already a minted ghost (backdrop aside)?
+  // Classic builds compare skin + the six trait bases against every classic
+  // mint through the base-36 index baked into the data; Neon builds compare
+  // exact Neon layer ids against the minted Neon blueprints. Competition
+  // entries have to be new ghosts, so the badge under the bench says so.
+
+  var circ = null;   // { classic: Map(sig -> [serials]), neon: Map(sig -> [serials]), codeOf }
+
+  function addSerial(map, sig, serial) {
+    var list = map.get(sig);
+    if (list) list.push(serial); else map.set(sig, [serial]);
+  }
+
+  function buildCirculation() {
+    circ = { classic: new Map(), neon: new Map(), codeOf: {} };
+    var m = G.minted;
+    if (m) {
+      m.order.forEach(function (slot) {
+        circ.codeOf[slot] = {};
+        m.codes[slot].forEach(function (base, i) { circ.codeOf[slot][base] = i; });
+      });
+      var w = m.order.reduce(function (n, slot) { return n + m.widths[slot]; }, 0);
+      var i = 0;
+      m.serialRuns.forEach(function (run) {
+        for (var serial = run[0]; serial <= run[1]; serial++, i++) {
+          addSerial(circ.classic, m.sig.substr(i * w, w), serial);
+        }
+      });
+    }
+    if (MINTED && MINTED.ghosts) {
+      (MINTED.neonSerials || []).forEach(function (serial) {
+        var bp = MINTED.ghosts[String(serial)];
+        if (bp) addSerial(circ.neon, neonSigOf(bp), serial);
+      });
+    }
+  }
+
+  function normNone(id) { return !id || baseOf(id) === "none" ? "none" : id; }
+
+  // exact-layer signature; works for a minted blueprint or the bench state
+  function neonSigOf(values) {
+    return ["skin", "propulsion", "hand_left", "eyes", "mouth", "head", "hand_right"].map(function (slot) {
+      return slot === "skin" ? skinLayerId(values[slot] || "") : normNone(values[slot]);
+    }).join("|");
+  }
+
+  function classicSig() {
+    var m = G.minted;
+    if (!m) return null;
+    var tok = "";
+    for (var i = 0; i < m.order.length; i++) {
+      var slot = m.order[i];
+      var base = slot === "skin" ? state.skin : baseOf(state[slot]);
+      var code = circ.codeOf[slot][base];
+      if (code === undefined) return null;
+      var s = code.toString(36);
+      while (s.length < m.widths[slot]) s = "0" + s;
+      tok += s;
+    }
+    return tok;
+  }
+
+  // serials already minted with the bench's traits (backdrop aside), or []
+  function circulationSerials() {
+    if (!circ) buildCirculation();
+    if (lockedSerial != null) return [lockedSerial];
+    if (neonMode) return circ.neon.get(neonSigOf(state)) || [];
+    var sig = classicSig();
+    return sig ? (circ.classic.get(sig) || []) : [];
+  }
+
+  function updateMintBadge() {
+    var host = document.getElementById("mintbadge");
+    if (!host || !G) return;
+    var serials = circulationSerials();
+    host.classList.toggle("taken", serials.length > 0);
+    host.textContent = "";
+    var pill = document.createElement("span");
+    pill.className = "pill";
+    pill.appendChild(document.createElement("i"));
+    var sub = document.createElement("span");
+    sub.className = "sub";
+    if (serials.length) {
+      var list = serials.map(function (s) { return "#" + s; });
+      pill.appendChild(document.createTextNode("Already in circulation — ghost " +
+        (list.length === 1 ? list[0] : list.slice(0, 2).join(" & ") + (list.length > 2 ? " +" + (list.length - 2) : ""))));
+      sub.textContent = lockedSerial != null
+        ? "the real minted Neon, as minted"
+        : "same traits as a minted ghost, backdrop aside — competition entries must be new";
+    } else {
+      pill.appendChild(document.createTextNode("Not in circulation"));
+      sub.textContent = neonMode ? "no minted Neon shares these layers" : "no minted ghost shares this trait combo";
+    }
+    host.appendChild(pill);
+    host.appendChild(sub);
   }
 
   function num(x) { return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
@@ -809,6 +1650,20 @@
 
   function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
+  function randomizeNeon() {
+    clearFx();
+    state.bg = rand(NEON.backgrounds).id;
+    state.skin = rand(neonOptionsFor("skin")).id;
+    TRAIT_SLOTS.forEach(function (slot) {
+      var pool = optionsFor(slot);
+      state[slot] = rand(pool).id;
+    });
+    applyNeonRules([], null);
+    syncRows();
+    render(true);
+    pushLog([{ t: "random curated Neon — " + recipeLabel(currentRecipe()) }]);
+  }
+
   function diceRoll(slot) {
     var pool = optionsFor(slot).filter(function (o) { return o.id !== stateIdFor(slot); });
     if (slot !== "skin" && slot !== "bg") {
@@ -820,6 +1675,12 @@
   }
 
   function randomizeAll() {
+    if (neonMode) {
+      randomizeNeon();
+      return;
+    }
+    neonOpenRequest++;
+    exitMintedMode();
     clearFx();
     state.bg = rand(G.backgrounds).id;
     state.skin = rand(G.skins).id;
@@ -842,6 +1703,16 @@
   }
 
   function resetAll() {
+    if (neonMode) {
+      clearFx();
+      restoreState(defaultNeonState());
+      syncRows();
+      render(true);
+      pushLog([{ t: "Neon bench reset — curated purple → cyan recipe" }]);
+      return;
+    }
+    neonOpenRequest++;
+    exitMintedMode();
     clearFx();
     Object.keys(DEFAULT_STATE).forEach(function (k) { state[k] = DEFAULT_STATE[k]; });
     syncRows();
@@ -850,6 +1721,30 @@
   }
 
   function download(noBg) {
+    if (neonMode) {
+      var downloadState = copyState(state);
+      var neonFilename = "ghostmaker-neon-" + unitId().toLowerCase() + (noBg ? "-nobg" : "") + ".png";
+      composeNeonCanvas(470, !noBg, noBg ? ["bg"] : null, downloadState).then(function (neonCanvas) {
+        neonCanvas.toBlob(function (blob) {
+          var link = document.createElement("a");
+          var neonHref = URL.createObjectURL(blob);
+          link.href = neonHref;
+          link.download = neonFilename;
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(function () { link.remove(); }, 1000);
+          setTimeout(function () { URL.revokeObjectURL(neonHref); }, 60000);
+        }, "image/png");
+      }).catch(function () {
+        pushLog([{ t: "download failed — a Neon layer would not load", warn: true }]);
+      });
+      return;
+    }
+    var serialAtDownload = lockedSerial;
+    var unitAtDownload = unitId();
+    var classicFilename = serialAtDownload != null
+      ? "ghostmaker-minted-neon-" + serialAtDownload + (noBg ? "-nobg" : "") + ".png"
+      : "ghostmaker-" + unitAtDownload.toLowerCase() + (noBg ? "-nobg" : "") + ".png";
     var urls = layerUrls(noBg ? ["bg"] : null);
     Promise.all(urls.map(loadImg)).then(function (imgs) {
       var cv = document.createElement("canvas");
@@ -861,7 +1756,7 @@
         var a = document.createElement("a");
         var href = URL.createObjectURL(blob);
         a.href = href;
-        a.download = "ghostmaker-" + unitId().toLowerCase() + (noBg ? "-nobg" : "") + ".png";
+        a.download = classicFilename;
         document.body.appendChild(a);
         a.click();
         setTimeout(function () { a.remove(); }, 1000);
@@ -876,11 +1771,21 @@
 
   // ---------- init --------------------------------------------------------
 
-  var ready = fetch(DATA_URL).then(function (r) {
-    if (!r.ok) throw new Error("data " + r.status);
-    return r.json();
-  }).then(function (data) {
-    G = data;
+  var ready = Promise.all([
+    fetch(DATA_URL).then(function (r) {
+      if (!r.ok) throw new Error("data " + r.status);
+      return r.json();
+    }),
+    fetch(MINTED_URL).then(function (r) {
+      if (!r.ok) throw new Error("minted data " + r.status);
+      return r.json();
+    })
+  ]).then(function (res) {
+    G = res[0];
+    MINTED = res[1];
+    neonDeck = [9314, 9403, 9406].concat(MINTED.neonSerials.filter(function (n) {
+      return n !== 9314 && n !== 9403 && n !== 9406;
+    }));
     TRAIT_SLOTS = G.slots.filter(function (s) { return s !== "skin"; });
     Object.keys(DEFAULT_STATE).forEach(function (k) { state[k] = DEFAULT_STATE[k]; });
 
@@ -890,26 +1795,43 @@
     });
     syncRows();
 
+    document.getElementById("btn-neon-build").addEventListener("click", toggleNeonBuilder);
+    document.getElementById("btn-neon").addEventListener("click", nextMintedNeon);
     document.getElementById("btn-random").addEventListener("click", randomizeAll);
     document.getElementById("btn-reset").addEventListener("click", resetAll);
     document.getElementById("btn-save").addEventListener("click", function () { download(false); });
     document.getElementById("btn-save-nobg").addEventListener("click", function () { download(true); });
+    ["btn-neon", "btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
+      document.getElementById(id).disabled = false;
+    });
+    setNeonButton("idle");
 
-    // mini preview when the stage scrolls out of view (mostly mobile)
+    // Mini preview when the stage scrolls out of view (mostly mobile). Hide it
+    // again once the action bar arrives so the fixed canvas never covers a
+    // download or mode button on a short/narrow screen.
     if (typeof IntersectionObserver !== "undefined") {
       var mini = document.getElementById("mini");
-      new IntersectionObserver(function (entries) {
-        mini.classList.toggle("show", !entries[0].isIntersecting);
-      }, { threshold: 0.1 }).observe(document.getElementById("ghost"));
+      var ghostVisible = true;
+      var actionsVisible = false;
+      var miniObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.target.id === "ghost") ghostVisible = entry.isIntersecting;
+          else actionsVisible = entry.isIntersecting;
+        });
+        mini.classList.toggle("show", !ghostVisible && !actionsVisible);
+      }, { threshold: 0 });
+      miniObserver.observe(document.getElementById("ghost"));
+      miniObserver.observe(document.querySelector(".actions"));
     }
 
     render(false);
-    pushLog([{ t: "vault open — 9,308 ghosts of precedent" }]);
+    if (DEFAULT_TO_NEON) toggleNeonBuilder();
+    else pushLog([{ t: "vault open — 9,412 minted ghosts · Neon lab available" }]);
   }).catch(function (err) {
     console.error("[ghostmaker] init failed", err);
     var log = document.getElementById("log");
     if (log) log.textContent = "TRAIT VAULT UNREACHABLE — RELOAD TO RETRY";
-    ["btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
+    ["btn-neon-build", "btn-neon", "btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
       var b = document.getElementById(id);
       if (b) b.disabled = true;
     });
@@ -921,11 +1843,16 @@
     ready: ready,
     get state() { return state; },
     get data() { return G; },
+    get neonData() { return NEON; },
+    get neonMode() { return neonMode; },
+    loadNeon: ensureNeonLoaded,
     rows: rows,
     optionsFor: optionsFor,
     set: function (slot, id) { userSet(slot, id, "next"); },
     step: function (slot, dir) { rows[slot].step(dir); },
     randomizeAll: randomizeAll,
+    nextMintedNeon: nextMintedNeon,
+    toggleNeonBuilder: toggleNeonBuilder,
     reset: resetAll,
     unitId: unitId,
     finish: function () {

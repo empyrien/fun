@@ -33,7 +33,7 @@
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
-  a.close { position: fixed; top: 18px; left: 20px; z-index: 30; color: rgba(241,238,246,0.5); text-decoration: none; font-size: 22px; font-weight: 300; line-height: 1; padding: 6px; }
+  a.close { position: fixed; top: calc(12px + env(safe-area-inset-top)); left: calc(14px + env(safe-area-inset-left)); z-index: 30; color: rgba(241,238,246,0.5); text-decoration: none; font-size: 22px; font-weight: 300; line-height: 1; padding: 11px; }
   a.close:hover { color: var(--ink); }
 
   .wrap {
@@ -75,6 +75,23 @@
     width: 40%; height: 12px; margin: 14px auto 0; border-radius: 50%;
     background: radial-gradient(closest-side, rgba(0,0,0,0.32), transparent 70%);
   }
+
+  /* circulation badge: is this exact trait combo already a minted ghost? */
+  .mintbadge {
+    margin: 12px auto 0; max-width: 100%;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    text-align: center; font-family: var(--mono); text-transform: uppercase;
+  }
+  .mintbadge .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 13px; border-radius: 999px;
+    border: 1px solid var(--led-dim); color: var(--led);
+    background: rgba(59,232,188,0.07);
+    font-size: 10.5px; letter-spacing: 0.12em; font-weight: 600;
+  }
+  .mintbadge .pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+  .mintbadge.taken .pill { border-color: rgba(255,171,132,0.55); color: var(--warn); background: rgba(255,171,132,0.08); }
+  .mintbadge .sub { font-size: 9px; letter-spacing: 0.1em; color: var(--ink-dim); }
   .floater.pop { animation: pop 0.26s ease-out; }
   @keyframes pop { 0% { scale: 1; } 35% { scale: 1.03; } 100% { scale: 1; } }
   @media (prefers-reduced-motion: reduce) { .floater.pop { animation: none !important; } }
@@ -92,7 +109,8 @@
   .rowval { display: block; font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; color: var(--led); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dice, .browse {
     background: none; border: 1px solid var(--card-edge); border-radius: 9px;
-    color: var(--ink-dim); font-size: 13px; line-height: 1; padding: 6px; cursor: pointer; flex: none;
+    width: 36px; height: 36px; padding: 0;
+    color: var(--ink-dim); font-size: 13px; line-height: 1; cursor: pointer; flex: none;
     transition: color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   }
   .dice:hover, .browse:hover { color: var(--led); border-color: var(--led-dim); }
@@ -152,6 +170,26 @@
   .actions button.primary { background: var(--ink); border-color: var(--ink); color: #272231; font-weight: 600; }
   .actions button.primary:hover { background: #ffffff; border-color: #ffffff; }
   .actions button:disabled { opacity: 0.35; cursor: default; }
+  .actions button.neon-preset {
+    border-color: rgba(255, 77, 220, 0.7);
+    color: #ffd7f8;
+    background: linear-gradient(110deg, rgba(255, 40, 194, 0.12), rgba(25, 245, 255, 0.1));
+    box-shadow: 0 0 24px rgba(217, 45, 255, 0.12);
+  }
+  .actions button.neon-preset:hover { border-color: #ff64dd; color: #fff; }
+  .actions button.neon-lab {
+    border-color: rgba(54, 246, 255, 0.78);
+    color: #d5fdff;
+    background: linear-gradient(110deg, rgba(25, 245, 255, 0.14), rgba(151, 70, 255, 0.13));
+    box-shadow: 0 0 24px rgba(25, 245, 255, 0.1);
+  }
+  .actions button.neon-lab:hover { border-color: #61f8ff; color: #fff; }
+  .neon-builder .ghostcol { filter: drop-shadow(0 0 20px rgba(47, 239, 255, 0.2)); }
+  .neon-builder .rowcount { color: rgba(80, 240, 255, 0.66); }
+  .neon-loading .bench { opacity: 0.55; transition: opacity 0.18s ease; }
+  .minted-neon .bench .rowmeta,
+  .minted-neon .bench .chip,
+  .minted-neon .bench .rowcount { opacity: 0.16; pointer-events: none; }
 
   /* ---------- mobile: ghost on top, shelf rows beneath ------------------ */
   @media (max-width: 760px) {
@@ -188,7 +226,7 @@
   .picker-sheet {
     width: min(680px, calc(100vw - 40px));
     height: 100vh; height: 100dvh;
-    padding: 22px;
+    padding: 22px max(22px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) 22px;
     overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain;
     border-left: 1px solid var(--card-edge);
     background:
@@ -198,7 +236,8 @@
   }
   .picker-head {
     position: sticky; top: -22px; z-index: 5;
-    min-height: 62px; margin: -22px -22px 16px; padding: 18px 22px 12px;
+    min-height: calc(62px + env(safe-area-inset-top)); margin: -22px -22px 16px;
+    padding: calc(18px + env(safe-area-inset-top)) 22px 12px;
     display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
     border-bottom: 1px solid rgba(255,255,255,0.07);
     background: rgba(39, 34, 49, 0.94);
@@ -207,14 +246,19 @@
   .picker-head .microlabel { display: block; font: 600 8px/1 var(--mono); letter-spacing: 0.12em; color: var(--ink-dim); text-transform: uppercase; }
   .picker-head h2 { margin: 4px 0 0; font-size: 22px; line-height: 1.1; font-weight: 600; }
   .picker-close {
-    width: 36px; height: 36px; flex: none;
+    width: 44px; height: 44px; flex: none;
     border: 1px solid var(--card-edge); border-radius: 50%;
     background: rgba(255,255,255,0.05); color: var(--ink-dim);
     font-size: 22px; line-height: 1; cursor: pointer;
   }
   .picker-close:hover { background: rgba(255,255,255,0.1); color: var(--ink); }
+  .picker-tools {
+    position: sticky; top: calc(40px + env(safe-area-inset-top)); z-index: 4;
+    margin: 0 -4px 14px; padding: 6px 4px 2px;
+    background: linear-gradient(to bottom, rgba(43,38,54,0.98) 82%, rgba(43,38,54,0));
+  }
   .gm-search-block {
-    margin-bottom: 14px; padding: 10px;
+    margin-bottom: 8px; padding: 10px;
     border: 1px solid rgba(59,232,188,0.22); border-radius: 12px;
     background: linear-gradient(135deg, rgba(59,232,188,0.055), rgba(177,140,255,0.045));
   }
@@ -234,6 +278,21 @@
     font: 700 8px/1 var(--mono); letter-spacing: 0.07em; cursor: pointer;
   }
   .search-meta button:hover { border-color: rgba(59,232,188,0.42); color: var(--led); }
+  .neon-skin-controls {
+    display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 10px;
+    border: 1px solid rgba(97,248,255,0.22); border-radius: 12px;
+    background: linear-gradient(120deg, rgba(25,245,255,0.06), rgba(217,45,255,0.055));
+  }
+  .neon-skin-controls[hidden] { display: none; }
+  .neon-choice { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .neon-choice > span { margin-right: 3px; color: var(--ink-dim); font: 650 8px/1 var(--mono); letter-spacing: 0.08em; }
+  .neon-choice button {
+    min-width: 38px; height: 34px; padding: 0 9px;
+    border: 1px solid rgba(255,255,255,0.11); border-radius: 999px;
+    background: rgba(0,0,0,0.13); color: var(--ink-dim);
+    font: 700 8px/1 var(--mono); cursor: pointer;
+  }
+  .neon-choice button[aria-pressed="true"] { border-color: #61f8ff; background: rgba(25,245,255,0.13); color: #e4feff; }
   .trait-browser-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 7px; }
   .trait-browser-grid > button {
     min-width: 0; min-height: 108px; padding: 8px 5px;
@@ -243,13 +302,17 @@
   }
   .trait-browser-grid > button:hover { transform: translateY(-1px); border-color: rgba(59,232,188,0.38); background: rgba(59,232,188,0.07); color: var(--ink); }
   .trait-browser-grid > button.current { border-color: var(--led); background: rgba(59,232,188,0.1); }
+  .trait-browser-grid > button.current::after { content: "SELECTED"; display: block; margin-top: 4px; color: var(--led); font: 700 7px/1 var(--mono); letter-spacing: 0.08em; }
   .trait-preview { width: 58px; height: 58px; margin: 0 auto 5px; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,0.03); }
-  .trait-preview img { width: 56px; height: 56px; object-fit: contain; image-rendering: crisp-edges; image-rendering: pixelated; }
+  .trait-preview img, .trait-preview canvas { width: 56px; height: 56px; object-fit: contain; image-rendering: crisp-edges; image-rendering: pixelated; }
   .trait-preview .none { color: var(--ink-faint); font-size: 20px; font-weight: 200; }
   .trait-browser-grid strong, .trait-browser-grid small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .trait-browser-grid strong { color: var(--ink); font-size: 9.5px; line-height: 1.25; font-weight: 600; }
   .trait-browser-grid small { margin-top: 2px; color: var(--ink-dim); font: 600 7px/1.2 var(--mono); text-transform: uppercase; letter-spacing: 0.05em; }
+  .neon-skin-picker .trait-browser-grid { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); }
+  .neon-skin-picker .trait-browser-grid small { min-height: 2.4em; white-space: normal; }
   .picker-empty { min-height: 140px; display: flex; align-items: center; justify-content: center; color: var(--ink-dim); font: 700 9px/1.5 var(--mono); letter-spacing: 0.09em; text-transform: uppercase; text-align: center; }
+  .picker-empty[hidden] { display: none; }
   .picker-footer { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .picker-footer span { color: var(--ink-dim); font: 600 8px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
   .picker-footer button {
@@ -260,7 +323,7 @@
   .picker-footer button:hover { border-color: rgba(241,238,246,0.4); }
 
   canvas#mini {
-    position: fixed; right: 16px; bottom: 16px; z-index: 20;
+    position: fixed; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 20;
     width: 94px; height: 94px; image-rendering: crisp-edges; image-rendering: pixelated;
     border-radius: 14px; background: #2e2939;
     box-shadow: 0 14px 30px -10px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.09);
@@ -278,7 +341,7 @@
   <header>
     <div class="eyebrow">Dead Pixels — Trait Bench <span class="led">●</span> <span id="unit">UNIT 0000</span></div>
     <h1>Ghostmaker</h1>
-    <p class="tagline">The ghost sits mid-assembly. Flick a shelf — parts fly on and off.</p>
+    <p class="tagline">Build classic ghosts or switch on the Neon lab. The parts know the rules.</p>
     <noscript><p>Ghostmaker needs JavaScript — it runs entirely in your browser.</p></noscript>
   </header>
   <div class="bench" id="bench">
@@ -286,22 +349,25 @@
     <div class="ghostcol">
       <div class="floatwrap">
         <div class="floater" id="floater">
-          <canvas id="ghost" width="47" height="47" aria-label="Your assembled ghost"></canvas>
+          <canvas id="ghost" width="47" height="47" role="img" aria-label="Your assembled ghost">Your assembled ghost.</canvas>
         </div>
         <div class="shadow"></div>
+        <div class="mintbadge" id="mintbadge" aria-live="polite"></div>
       </div>
     </div>
     <div id="benchfx" aria-hidden="true"></div>
   </div>
   <div class="log" id="log" aria-live="polite"></div>
   <div class="actions">
-    <button class="primary" id="btn-random">Randomize all</button>
-    <button id="btn-reset">Reset</button>
-    <button id="btn-save">Download PNG</button>
-    <button id="btn-save-nobg">PNG · no backdrop</button>
+    <button class="neon-lab" id="btn-neon-build" aria-pressed="false" title="Build with every generated Neon layer inside the curated palette and compatibility rules" disabled>Build any Neon</button>
+    <button class="neon-preset" id="btn-neon" title="Cycles only through complete Neon ghosts that were actually minted" disabled>Minted Neon · #9314</button>
+    <button class="primary" id="btn-random" disabled>Randomize all</button>
+    <button id="btn-reset" disabled>Reset</button>
+    <button id="btn-save" disabled>Download PNG</button>
+    <button id="btn-save-nobg" disabled>PNG · no backdrop</button>
   </div>
 </main>
 <canvas id="mini" width="47" height="47" aria-hidden="true"></canvas>
-<script src="/js/ghostmaker.js?v=12"></script>
+<script src="/js/ghostmaker.js?v=16"></script>
 </body>
 </html>

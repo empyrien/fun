@@ -251,9 +251,68 @@ def main():
                 if topn / total >= 0.99:
                     requires.append({"if": [A, a], "then": [B, top]})
 
+    # ---- circulation index: one fixed-width base-36 signature per classic
+    # mint (skin + the six traits by base, background ignored) so the app can
+    # tell a builder "this exact ghost is already in circulation as #N". Read
+    # from the full 9,412-serial collection file; Neon mints (skin "neon")
+    # are skipped here — the app matches those against the exact Neon
+    # blueprints it already loads. A signature can name more than one serial
+    # (#9309 repeats #7646's combo with an alt variant of the same cap), so
+    # serials are listed alongside and the app groups repeats.
+    full_src = os.path.join(ROOT, "ghost-assets", "ghost-anim-data-9412.json")
+    with open(full_src if os.path.exists(full_src) else SRC) as f:
+        full = json.load(f)
+    sig_order = ["skin"] + slots
+    codes = {"skin": [s["id"] for s in skin_opts]}
+    for slot in slots:
+        codes[slot] = sorted(out_slots[slot].keys())
+    B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+    def b36(n, width):
+        s = ""
+        while n:
+            s = B36[n % 36] + s
+            n //= 36
+        return s.rjust(width, "0")
+
+    widths = {slot: max(1, len(b36(len(codes[slot]) - 1, 1))) for slot in sig_order}
+    sigs, serials, seen, skipped = [], [], {}, []
+    for serial in sorted(int(k) for k in full["ghosts"]):
+        arr = full["ghosts"][str(serial)]
+        tok = ""
+        for slot in sig_order:
+            v = full["values"][slot][arr[full["order"].index(slot)]]
+            base = v if slot == "skin" else v.partition("$")[0]
+            if base not in codes[slot]:
+                tok = None
+                break
+            tok += b36(codes[slot].index(base), widths[slot])
+        if tok is None:
+            skipped.append(serial)
+            continue
+        seen.setdefault(tok, []).append(serial)
+        sigs.append(tok)
+        serials.append(serial)
+    # serials as [start, end] runs — the set is contiguous apart from the
+    # Neon gaps, so this is a handful of pairs instead of 9k integers
+    runs = []
+    for s in serials:
+        if runs and runs[-1][1] == s - 1:
+            runs[-1][1] = s
+        else:
+            runs.append([s, s])
+    minted = {"order": sig_order, "codes": codes, "widths": widths,
+              "sig": "".join(sigs), "serialRuns": runs}
+    neon_skipped = [s for s in skipped if full["values"]["skin"][full["ghosts"][str(s)][full["order"].index("skin")]] == "neon"]
+    repeats = {tok: v for tok, v in seen.items() if len(v) > 1}
+    print(f"circulation index: {len(serials)} classic mints signed; skipped {len(skipped)} "
+          f"({len(neon_skipped)} Neon, {len(skipped) - len(neon_skipped)} with unknown bases); "
+          f"repeated combos: {sorted(repeats.values())}")
+
     data = {
         "size": d["size"],
         "paintOrder": ["bg"] + order,
+        "minted": minted,
         "slots": slots,
         "skins": skin_opts,
         "traits": out_slots,

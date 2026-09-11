@@ -31,6 +31,20 @@ emits [`ghost-assets/ghostmaker-data.json`](ghost-assets/ghostmaker-data.json):
    gear (backpacks, battle axe, scythe, stuck hatchet) — 19 rules, plus the
    3-slot jetpack rig. The app enforces them with cycle-free cascades.
 
+## Circulation badge
+
+Under the ghost, a badge says whether the exact build is **already in
+circulation**: classic builds are matched by skin + the six trait bases
+(backdrop ignored, alt variants collapsed — so #7646 and #9309, which differ
+only by a cap variant, both count) against every classic mint via a compact
+base-36 signature index in the data file; Neon builds are matched by exact
+Neon layer ids against the minted Neon blueprints. Built for community
+build competitions, where an entry has to be a ghost that doesn't exist yet.
+
+The live page also has a **Neon lab** (curated palette recipes over a
+generated layer atlas, the competition default) whose data files are served
+from the site and are not mirrored here.
+
 ## Files
 
 | File | What it is |
