@@ -200,9 +200,16 @@
   .mode-label { transition: color 0.2s ease, text-shadow 0.3s ease; }
   .modeswitch:not(.on) .mode-classic { color: var(--ink); }
   .mode-track {
-    position: relative; width: 48px; height: 26px; border-radius: 999px;
+    position: relative; isolation: isolate; width: 48px; height: 26px; border-radius: 999px;
     background: rgba(255,255,255,0.08); border: 1px solid var(--card-edge);
-    transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    transition: background 0.3s ease, border-color 0.3s ease;
+  }
+  /* the glow is a blurred copy of the track itself, so each half glows in
+     its own colour instead of one colour haloing the whole pill */
+  .mode-track::before {
+    content: ""; position: absolute; inset: -1px; border-radius: 999px; z-index: -1;
+    background: inherit; filter: blur(7px); opacity: 0;
+    transition: opacity 0.3s ease;
   }
   .mode-knob {
     position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
@@ -210,11 +217,12 @@
     transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.3, 1.18), background 0.3s ease, box-shadow 0.3s ease;
   }
   .modeswitch.on {
-    border-color: rgba(54, 246, 255, 0.55);
-    background: linear-gradient(110deg, rgba(255, 40, 194, 0.12), rgba(25, 245, 255, 0.12));
-    box-shadow: 0 0 30px rgba(140, 90, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.2);
+    background: linear-gradient(110deg, rgba(255, 40, 194, 0.10), rgba(25, 245, 255, 0.10));
+    box-shadow: 0 0 30px rgba(140, 90, 255, 0.18);
   }
-  .modeswitch.on .mode-track { background: linear-gradient(90deg, #ff2cc2, #19f5ff); border-color: transparent; box-shadow: 0 0 16px rgba(25, 245, 255, 0.5); }
+  .modeswitch.on .mode-track { background: linear-gradient(90deg, #ff2cc2, #19f5ff); border-color: transparent; }
+  .modeswitch.on .mode-track::before { opacity: 0.7; }
   .modeswitch.on .mode-knob { transform: translateX(22px); background: #fff; box-shadow: 0 0 10px #fff; }
   .modeswitch.on .mode-neon { color: #d5fdff; text-shadow: 0 0 10px rgba(25, 245, 255, 0.75); }
   .modeswitch.loading .mode-knob { animation: knobpulse 0.9s ease-in-out infinite; }
@@ -408,6 +416,6 @@
   </div>
 </main>
 <canvas id="mini" width="47" height="47" aria-hidden="true"></canvas>
-<script src="/js/ghostmaker.js?v=18"></script>
+<script src="/js/ghostmaker.js?v=19"></script>
 </body>
 </html>
