@@ -48,15 +48,18 @@ from the site and are not mirrored here.
 ## Posting an entry to X
 
 "Post your entry" (under the badge, disabled for builds already in
-circulation) shares the build as a contest entry tagged @deadpixels_club.
-X's post links can prefill text but not attach media, so on phones the
-native share sheet hands the image and text to the X app, and on desktop
-the image goes to the clipboard while X's composer opens ready to paste.
+circulation) posts the ghost image itself as a contest entry — the entry
+line, @deadpixels_club and #GhostmakerContest, with no link. X's post
+links can prefill text but not attach media, so the image goes in as a
+real upload: on phones the native share sheet hands the image and text to
+the X app; on desktop the click copies the image and an attach panel
+takes it from there (Open X beside the page, then paste, with copy-again
+and download as fallbacks).
 
-Each post links back to the exact build: `/ghostmaker?skin=…&head=…`, one
+Builds can still be reopened from a link, `/ghostmaker?skin=…&head=…`: one
 key per slot (`bg skin head eyes mouth lh rh prop`, plus `m=neon`),
-omitted slots meaning none, and `.` standing in for `$` in trait ids.
-Opening a link re-validates every value against the vault and the rules.
+omitted slots meaning none, `.` standing in for `$` in trait ids. Opening
+one re-validates every value against the vault and the rules.
 
 ## Files
 

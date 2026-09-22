@@ -1582,16 +1582,20 @@
       : "Post this build to X as a Ghostmaker contest entry";
     hint.textContent = taken ? "already minted — change a trait to enter"
       : prefersShareSheet() ? "opens your share sheet — pick X"
-      : "opens X with your entry · your ghost is copied, paste it in (" + pasteKeys() + ")";
+      : "copies your ghost, then opens X for you to paste it in";
   }
 
   // ---------- contest entry: post to X ------------------------------------
-  // X's post links can prefill text but never attach media, so the image
-  // travels separately: phones hand image + text to the X app through the
-  // native share sheet; desktops get the image on the clipboard while X's
-  // composer opens with the text filled in, ready for a paste. Every post
-  // carries a link that reopens this exact build — how an entry is judged,
-  // and minted trait for trait if it wins.
+  // The post is the image, with no link. X's post links prefill text but
+  // can't attach media (and a link card would mean a link), so the image
+  // goes in as a real upload the only ways a website can hand one over: on
+  // phones the native share sheet gives the X app image + text together; on
+  // desktop the click copies the image and the attach panel takes it from
+  // there: Open X, then paste, with copy-again and download for browsers
+  // that balk. The copy and the X window get separate clicks on purpose —
+  // opening a window uses up a click's permission, which can cancel a copy
+  // started in the same click. The ?skin=… build links below aren't part
+  // of posts; they still reopen an exact build.
 
   var SITE = "https://www.deadpixels.club";
   var CLUB_HANDLE = "deadpixels_club";
@@ -1714,73 +1718,221 @@
     return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "") ? "⌘V" : "Ctrl+V";
   }
 
+  function pasteSteps() {
+    if (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) {
+      return "tap into the post, long-press and tap Paste";
+    }
+    return "click into the post and press " + pasteKeys();
+  }
+
   function postText() {
-    return "My " + (neonMode ? "Neon " : "") + "entry for the @" + CLUB_HANDLE + " Ghostmaker contest 👻\n\n" +
-      shareUrl() + "\n\n#" + CONTEST_TAG;
+    return "My " + (neonMode ? "Neon " : "") + "entry for the @" + CLUB_HANDLE + " Ghostmaker contest 👻 #" + CONTEST_TAG;
   }
 
   function intentUrl(text) { return "https://x.com/intent/tweet?text=" + encodeURIComponent(text); }
 
-  // a tap-able link in the hint, for when the browser won't open X for us
-  function offerLink(label, href) {
-    var hint = document.getElementById("xpost-hint");
-    hint.textContent = "";
-    var a = document.createElement("a");
-    a.href = href;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = label;
-    hint.appendChild(a);
+  // Starts an image copy. Browsers only allow it inside a click.
+  function copyImage(data) {
+    try {
+      if (typeof ClipboardItem === "undefined" || !navigator.clipboard || !navigator.clipboard.write) {
+        throw new Error("no image clipboard");
+      }
+      return navigator.clipboard.write([new ClipboardItem({ "image/png": data })]);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  // X's composer in a window beside the page, the way X's own share buttons
+  // open it, so the attach panel stays in view during the paste.
+  function openXComposer(intent) {
+    var w = 600, h = 720;
+    var left = Math.max(0, (window.screenX || 0) + (window.outerWidth || w) - w - 40);
+    var top = Math.max(0, (window.screenY || 0) + 60);
+    var win = window.open(intent, "gm-x-post", "popup,width=" + w + ",height=" + h + ",left=" + left + ",top=" + top);
+    if (win) {
+      try { win.opener = null; } catch (err) {}
+    }
+    return win;
+  }
+
+  var attach = null;
+
+  function ensureAttachPanel() {
+    if (attach) return attach;
+    var el = document.createElement("div");
+    el.className = "attach-backdrop";
+    el.style.display = "none";
+    el.innerHTML =
+      '<section class="attach-card" role="dialog" aria-modal="true" aria-labelledby="attach-title">' +
+        '<button type="button" class="attach-close" aria-label="Close">×</button>' +
+        '<img class="attach-img" alt="Your ghost — the image to attach">' +
+        '<div class="attach-body">' +
+          '<h2 id="attach-title">Attach your ghost to the post</h2>' +
+          '<p class="attach-msg" aria-live="polite"></p>' +
+          '<div class="attach-actions">' +
+            '<button type="button" class="attach-share">Share again</button>' +
+            '<a class="attach-open" href="https://x.com/" target="gm-x-post" rel="noopener">Open X ↗</a>' +
+            '<button type="button" class="attach-copy">Copy image</button>' +
+            '<button type="button" class="attach-save">Download</button>' +
+          '</div>' +
+          "<p class=\"attach-note\">X doesn't let websites add images to a post, so the paste is the one step that's yours.</p>" +
+        '</div>' +
+      '</section>';
+    document.body.appendChild(el);
+    attach = {
+      el: el,
+      img: el.querySelector(".attach-img"),
+      msg: el.querySelector(".attach-msg"),
+      shareBtn: el.querySelector(".attach-share"),
+      copyBtn: el.querySelector(".attach-copy"),
+      openLink: el.querySelector(".attach-open"),
+      saveBtn: el.querySelector(".attach-save"),
+      entry: null,
+      url: null,
+      inerted: []
+    };
+    el.addEventListener("mousedown", function (e) { if (e.target === el) closeAttachPanel(); });
+    el.querySelector(".attach-close").addEventListener("click", closeAttachPanel);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && attach.el.style.display !== "none") closeAttachPanel();
+    });
+    // After a refused share sheet the image is ready, so this tap can open
+    // the sheet synchronously, the way iOS insists on.
+    attach.shareBtn.addEventListener("click", function () {
+      var entry = attach.entry;
+      if (!entry || !entry.ready) return;
+      var sent;
+      try {
+        sent = navigator.share({ files: [new File([entry.ready], entry.name, { type: "image/png" })], text: entry.text });
+      } catch (err) {
+        sent = Promise.reject(err);
+      }
+      sent.then(function () {
+        closeAttachPanel();
+        pushLog([{ t: "entry handed to your share sheet — good luck" }]);
+      }).catch(function () {});   // closed or refused again: the manual steps stay up
+    });
+    attach.copyBtn.addEventListener("click", function () {
+      if (attach.entry) trackCopy(copyImage(attach.entry.blob), attach.entry);
+    });
+    attach.openLink.addEventListener("click", function (e) {
+      var entry = attach.entry;
+      if (!entry) { e.preventDefault(); return; }
+      // Side-by-side window first; if the browser refuses it, the link's
+      // own navigation still opens X in a new tab.
+      if (openXComposer(entry.intent)) e.preventDefault();
+      entry.opened = true;
+      renderAttachMsg();
+    });
+    attach.saveBtn.addEventListener("click", function () {
+      var entry = attach.entry;
+      if (entry) entry.blob.then(function (blob) { saveBlob(blob, entry.name); }).catch(function () {});
+    });
+    return attach;
+  }
+
+  function renderAttachMsg() {
+    var e = attach.entry;
+    var steps = pasteSteps();
+    attach.msg.textContent = e.copy === "pending" ? "Copying your ghost…"
+      : e.copy === "failed" ? "Your browser wouldn't copy the image. Hit Copy image to try again, or Download it and add it with the photo button in X."
+      : e.copy === "idle" && e.sheetFailed ? "The share sheet didn't open. Tap Share again — or by hand: Copy image, Open X, then " + steps + "."
+      : e.copy === "idle" ? "Hit Copy image, then Open X: " + steps + " to attach it."
+      : e.opened ? "X is open — " + steps + " to attach your ghost, then post."
+      : "Your ghost is copied. Open X, then " + steps + " to attach it.";
+    attach.shareBtn.style.display = e.sheetFailed ? "" : "none";
+    attach.shareBtn.classList.toggle("primary", e.sheetFailed && e.copy === "idle");
+    attach.copyBtn.textContent = e.copy === "ok" ? "Copy again" : "Copy image";
+    attach.copyBtn.classList.toggle("primary", e.copy === "failed" || (e.copy === "idle" && !e.sheetFailed));
+    attach.openLink.classList.toggle("primary", e.copy === "ok" && !e.opened);
+  }
+
+  function trackCopy(promise, entry) {
+    entry.copy = "pending";
+    renderAttachMsg();
+    promise.then(function () {
+      if (attach.entry !== entry) return;
+      entry.copy = "ok";
+      renderAttachMsg();
+    }, function () {
+      if (attach.entry !== entry) return;
+      entry.copy = "failed";
+      renderAttachMsg();
+    });
+  }
+
+  function showAttachPanel(entry, copying) {
+    var p = ensureAttachPanel();
+    p.entry = entry;
+    entry.copy = "idle";
+    p.openLink.href = entry.intent;
+    if (p.url) { URL.revokeObjectURL(p.url); p.url = null; }
+    p.img.removeAttribute("src");
+    entry.blob.then(function (blob) {
+      entry.ready = blob;
+      if (p.entry !== entry) return;
+      p.url = URL.createObjectURL(blob);
+      p.img.src = p.url;
+    }).catch(function () {});
+    if (p.el.style.display === "none") {
+      p.el.style.display = "flex";
+      p.inerted = [];
+      Array.prototype.forEach.call(document.body.children, function (el) {
+        if (el === p.el || el.inert) return;
+        el.inert = true;
+        p.inerted.push(el);
+      });
+    }
+    if (copying) trackCopy(copying, entry); else renderAttachMsg();
+    (copying ? p.openLink : entry.sheetFailed ? p.shareBtn : p.copyBtn).focus();
+  }
+
+  function closeAttachPanel() {
+    if (!attach || attach.el.style.display === "none") return;
+    attach.el.style.display = "none";
+    attach.inerted.forEach(function (el) { el.inert = false; });
+    attach.inerted = [];
+    attach.entry = null;
+    if (attach.url) { URL.revokeObjectURL(attach.url); attach.url = null; }
+    var btn = document.getElementById("btn-post-x");
+    if (btn) btn.focus();
   }
 
   function postToX() {
     if (!G || circulationSerials().length) return;
     var text = postText();
-    var intent = intentUrl(text);
-    var name = "ghostmaker-" + (neonMode ? "neon-" : "") + unitId().toLowerCase() + ".png";
     var ready = shareCache.key === shareKey() ? shareCache.blob : null;
+    var entry = {
+      text: text,
+      intent: intentUrl(text),
+      name: "ghostmaker-" + (neonMode ? "neon-" : "") + unitId().toLowerCase() + ".png",
+      blob: ready ? Promise.resolve(ready) : shareBlob(),
+      ready: ready,
+      opened: false,
+      sheetFailed: false
+    };
 
     if (prefersShareSheet()) {
       var sheet = function (blob) {
-        return navigator.share({ files: [new File([blob], name, { type: "image/png" })], text: text });
+        return navigator.share({ files: [new File([blob], entry.name, { type: "image/png" })], text: text });
       };
       var sent;
-      try { sent = ready ? sheet(ready) : shareBlob().then(sheet); } catch (err) { sent = Promise.reject(err); }
+      try { sent = ready ? sheet(ready) : entry.blob.then(sheet); } catch (err) { sent = Promise.reject(err); }
       sent.then(function () {
         pushLog([{ t: "entry handed to your share sheet — good luck" }]);
       }).catch(function (err) {
         if (err && err.name === "AbortError") return;   // the sheet was closed
         // A sheet can refuse a file that finished rendering after the tap;
-        // it's ready now, and X is one tap away either way.
-        offerLink("open X with your entry text ↗", intent);
-        pushLog([{ t: "the share sheet didn't open — tap Post again, or use the X link", warn: true }]);
+        // hand the same image over the manual way instead.
+        entry.sheetFailed = true;
+        showAttachPanel(entry, null);
       });
       return;
     }
 
-    var copied;
-    try {
-      if (typeof ClipboardItem === "undefined" || !navigator.clipboard || !navigator.clipboard.write) {
-        throw new Error("no image clipboard");
-      }
-      copied = navigator.clipboard.write([new ClipboardItem({ "image/png": ready || shareBlob() })]);
-    } catch (err) {
-      copied = Promise.reject(err);
-    }
-    // Open X inside the click, before anything awaits, so pop-up blockers
-    // see a direct user action.
-    var win = window.open(intent, "_blank");
-    if (win) {
-      try { win.opener = null; } catch (err) {}
-    } else {
-      offerLink("pop-up blocked — open X with your entry ↗", intent);
-    }
-    copied.then(function () {
-      pushLog([{ t: "ghost copied — paste it into your X post (" + pasteKeys() + ")" }]);
-    }).catch(function () {
-      shareBlob().then(function (blob) { saveBlob(blob, name); }).catch(function () {});
-      pushLog([{ t: "couldn't copy the image here — it downloaded instead; attach it to your post", warn: true }]);
-    });
+    // Only the copy happens in this click; X opens from the panel's own.
+    showAttachPanel(entry, copyImage(ready || entry.blob));
   }
 
   function num(x) { return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
