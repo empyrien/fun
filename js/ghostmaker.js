@@ -153,25 +153,6 @@
 
   function skinLayerId(id) { return id.split("@", 1)[0]; }
 
-  function recipeIndexFromSkin(id) {
-    var at = id.lastIndexOf("@");
-    return at === -1 ? 0 : Number(id.slice(at + 1));
-  }
-
-  function currentRecipe() {
-    return NEON && NEON.allowedRecipes[recipeIndexFromSkin(state.skin)];
-  }
-
-  function recipeAccentColors(recipe) {
-    // Monochrome recipes omit an accent list; accessories use the body colour.
-    return recipe.accents.length ? recipe.accents : [recipe.skin];
-  }
-
-  function recipeLabel(recipe) {
-    var accents = recipeAccentColors(recipe).map(titleWords).join(" + ");
-    return titleWords(recipe.skin) + " · " + accents;
-  }
-
   function buildNeonIndex() {
     neonIndex = {};
     neonSkinOptions = null;
@@ -222,7 +203,7 @@
     if (status) {
       status.textContent = mode === "loading" ? "loading the Neon atlas…"
         : mode === "error" ? "Neon atlas didn't load — tap the switch to retry"
-        : mode === "active" ? "Neon lab · curated palettes" : "classic trait vault";
+        : mode === "active" ? "Neon lab · free accessory colors" : "classic trait vault";
     }
   }
 
@@ -315,16 +296,12 @@
   }
 
   function defaultNeonState() {
-    var wanted = "purple_to_cyan|cyan,purple";
-    var recipeIndex = NEON.allowedRecipes.findIndex(function (recipe) { return recipe.key === wanted; });
-    if (recipeIndex < 0) recipeIndex = 0;
-    var recipe = NEON.allowedRecipes[recipeIndex];
-    var skins = neonIndex.skin.filter(function (item) { return item.palette === recipe.skin; });
+    var skins = neonIndex.skin.filter(function (item) { return item.palette === "purple_to_cyan"; });
     var skin = skins.filter(function (item) { return item.light === 20 && item.bloom === 40; })[0] || skins[0];
     var body = parseNeonVariant(skin.value, "skin");
     return {
       bg: "starlight",
-      skin: skin.value + "@" + recipeIndex,
+      skin: skin.value,
       propulsion: "none",
       hand_left: "none",
       eyes: findNeonLayer("eyes", "expression_eyes", body.palette, body.light),
@@ -361,14 +338,13 @@
     setNeonButton("active");
     syncRows();
     render(true);
-    pushLog([{ t: "Neon lab open — 98 curated recipes · unlisted colour combinations stay blocked" }]);
+    pushLog([{ t: "Neon lab open — mix all 11 accessory colors with any skin" }]);
   }
 
   function skinLabel(id) {
     if (neonMode) {
       var meta = parseNeonVariant(id, "skin");
-      var recipe = NEON.allowedRecipes[recipeIndexFromSkin(id)];
-      return recipeLabel(recipe) + " · L" + meta.light + " · Glow " + meta.bloom;
+      return titleWords(meta.palette) + " · L" + meta.light + " · Glow " + meta.bloom;
     }
     for (var i = 0; i < G.skins.length; i++) if (G.skins[i].id === id) return G.skins[i].label;
     return id;
@@ -434,34 +410,26 @@
     }
     if (slot === "skin") {
       if (neonSkinOptions) return neonSkinOptions;
-      var skins = [];
-      NEON.allowedRecipes.forEach(function (recipe, recipeIndex) {
-        neonIndex.skin.forEach(function (item) {
-          if (item.palette !== recipe.skin) return;
-          skins.push({
-            id: item.value + "@" + recipeIndex,
-            value: item.value,
-            label: titleWords(recipe.skin),
-            slot: "skin",
-            cell: item.cell,
-            neon: true,
-            recipeIndex: recipeIndex,
-            light: item.light,
-            bloom: item.bloom,
-            preferred: recipe.preferred,
-            variant: (recipe.preferred ? "Preferred · " : "") +
-              "Accents " + recipeAccentColors(recipe).map(titleWords).join(" + ") +
-              " · L" + item.light + " · Glow " + item.bloom
-          });
-        });
+      // Each body variant appears once. Accessory colors are selected
+      // independently, so curated recipe metadata no longer duplicates skins.
+      neonSkinOptions = neonIndex.skin.map(function (item) {
+        return {
+          id: item.value,
+          value: item.value,
+          label: titleWords(item.palette),
+          slot: "skin",
+          cell: item.cell,
+          neon: true,
+          palette: item.palette,
+          light: item.light,
+          bloom: item.bloom,
+          variant: "L" + item.light + " · Glow " + item.bloom
+        };
       });
-      neonSkinOptions = skins;
       return neonSkinOptions;
     }
 
     var skinMeta = parseNeonVariant(state.skin, "skin");
-    var recipe = currentRecipe();
-    var accentSet = new Set(recipeAccentColors(recipe));
     var bodySet = new Set(NEON.bodyBases[slot] || []);
     var accentBases = new Set(NEON.accentBases[slot] || []);
     var out = [];
@@ -474,7 +442,6 @@
       var body = bodySet.has(item.base);
       var accent = accentBases.has(item.base);
       if (body && (item.palette !== skinMeta.palette || item.light !== skinMeta.light)) return;
-      if (accent && !accentSet.has(item.palette)) return;
       if (!body && !accent) return;
       var label = (G.traits[slot][item.base] || {}).label || titleWords(item.base);
       out.push({
@@ -487,7 +454,7 @@
         base: item.base,
         palette: item.palette,
         light: item.light,
-        variant: titleWords(item.palette) + " · L" + item.light + (body ? " · Body-lit" : " · Curated accent")
+        variant: titleWords(item.palette) + " · L" + item.light + (body ? " · Body-lit" : " · Accessory")
       });
     });
     out.sort(function (a, b) {
@@ -695,10 +662,12 @@
     this.meta.setAttribute("aria-label", SLOT_LABEL[this.slot] + " — " + traitLabel(this.slot, cur) +
       ". Arrow keys change it; Enter browses all parts.");
     this.meta.title = "Browse all " + SLOT_LABEL[this.slot].toLowerCase() + " parts";
+    this.meta.querySelector(".revert").setAttribute("aria-label", "Revert " +
+      SLOT_LABEL[this.slot].toLowerCase() + " to " + (neonMode ? "the Neon baseline" : "the baseline (ghost #1)"));
     var minted = 0;
     if (neonMode) {
       this.count.textContent = this.slot === "skin"
-        ? "curated palette recipe"
+        ? "body palette"
         : (cur === "none" ? "" : "eligible Neon layer");
     } else if (this.slot === "skin") {
       minted = (G.skins.filter(function (s) { return s.id === cur; })[0] || {}).minted || 0;
@@ -914,55 +883,46 @@
     });
   }
 
-  function reconcileNeonForSkin(msgs) {
+  function reconcileNeonForSkin() {
     var skin = parseNeonVariant(state.skin, "skin");
-    var accents = new Set(recipeAccentColors(currentRecipe()));
     TRAIT_SLOTS.forEach(function (slot) {
       var id = state[slot];
       if (!id || id === "none") return;
       var base = baseOf(id);
+      // Expressions and the relaxed hand are body artwork; accessories
+      // retain the exact color and brightness the user chose.
       if ((NEON.bodyBases[slot] || []).indexOf(base) !== -1) {
         state[slot] = findNeonLayer(slot, base, skin.palette, skin.light) || "none";
         return;
       }
-      if ((NEON.accentBases[slot] || []).indexOf(base) !== -1) {
-        var style = parseNeonVariant(id, slot);
-        if (accents.has(style.palette) && findNeonLayer(slot, base, style.palette, style.light)) return;
-        var next = null;
-        recipeAccentColors(currentRecipe()).some(function (palette) {
-          next = findNeonLayer(slot, base, palette, style.light) || findNeonLayer(slot, base, palette, 0);
-          return !!next;
-        });
-        state[slot] = next || "none";
-        msgs.push({ t: titleWords(base) + " recoloured to stay inside the curated palette" });
-        return;
-      }
+      if ((NEON.accentBases[slot] || []).indexOf(base) !== -1 && neonCell(slot, id) != null) return;
       state[slot] = "none";
     });
   }
 
-  function neonUserSet(slot, id) {
+  function neonUserSet(slot, id, dirHint) {
     if (state[slot] === id) return;
     clearFx();
     var msgs = [];
     if (!availableNow(slot, id)) {
-      pushLog([{ t: "blocked — that Neon part is outside the active curated recipe", warn: true }]);
+      pushLog([{ t: "that Neon part is not available for this slot", warn: true }]);
       return;
     }
+    var prev = snapshotLayers();
     state[slot] = id;
     if (slot === "skin") {
-      reconcileNeonForSkin(msgs);
-      msgs.unshift({ t: "curated palette — " + recipeLabel(currentRecipe()) });
+      reconcileNeonForSkin();
+      msgs.unshift({ t: "Neon skin — " + skinLabel(state.skin) });
     }
     applyNeonRules(msgs, slot);
     syncRows();
-    render(true);
+    renderWithFlights(slot, prev, dirHint || "next");
     pushLog(msgs);
   }
 
   function userSet(slot, id, dirHint) {
     if (neonMode) {
-      neonUserSet(slot, id);
+      neonUserSet(slot, id, dirHint);
       return;
     }
     if (state[slot] === id) return;
@@ -1100,108 +1060,151 @@
   // 47px frame. Outgoing parts fly to the opposite shelf; cascade-dropped
   // parts fly off toward their own row's next shelf and fade.
 
-  var REDUCED_MOTION = typeof matchMedia === "function" &&
-    matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var motionPreference = typeof matchMedia === "function"
+    ? matchMedia("(prefers-reduced-motion: reduce)") : null;
   var fxSeq = 0;
+  var fxAnimations = [];
   var FX_MS = 360;
 
   function clearFx() {
     fxSeq++;
-    ["benchfx", "benchfx-back"].forEach(function (id) {
-      var host = document.getElementById(id);
-      if (host) host.textContent = "";
+    // Invalidate pending image work as well as animations already on screen.
+    renderToken++;
+    fxAnimations.forEach(function (animation) { animation.cancel(); });
+    fxAnimations = [];
+    var host = document.getElementById("benchfx");
+    if (host) host.textContent = "";
+    var floater = document.getElementById("floater");
+    if (floater) floater.classList.remove("is-flying");
+  }
+
+  // A resize can move the shelves relative to the ghost mid-flight. The
+  // finished composite is already underneath, so reveal it at the new size.
+  window.addEventListener("resize", function () {
+    if (fxAnimations.length) clearFx();
+  });
+  if (motionPreference && motionPreference.addEventListener) {
+    motionPreference.addEventListener("change", function () {
+      if (motionPreference.matches && fxAnimations.length) clearFx();
     });
   }
 
   function snapshotLayers() {
-    var out = { files: {}, ids: {} };
-    ROW_ORDER.forEach(function (s) {
-      var f = currentFile(s);
-      out.files[s] = f ? assetUrl(s === "bg" ? "bg" : (s === "skin" ? "skin" : s), f) : null;
-      out.ids[s] = stateIdFor(s);
+    var out = { files: {}, cells: {}, paintOrder: neonMode
+      ? ["bg"].concat(NEON.paintOrder || NEON_PAINT_ORDER)
+      : ["bg", "skin"].concat(TRAIT_SLOTS) };
+    ROW_ORDER.forEach(function (slot) {
+      var file = currentFile(slot);
+      out.files[slot] = file ? assetUrl(slot, file) : null;
+      out.cells[slot] = neonMode && slot !== "bg" && state[slot] !== "none"
+        ? neonCell(slot, state[slot]) : null;
     });
     return out;
   }
 
   function renderWithFlights(changedSlot, prev, dir) {
-    var fx = [];
-    if (!REDUCED_MOTION) {
-      ROW_ORDER.forEach(function (s) {
-        var nowId = stateIdFor(s);
-        var wasId = prev.ids[s];
-        if (nowId === wasId) return;
-        var f = currentFile(s);
-        var nowFile = f ? assetUrl(s === "bg" ? "bg" : (s === "skin" ? "skin" : s), f) : null;
-        var wasFile = prev.files[s];
-        if (s === changedSlot) {
-          // outgoing part exits toward the shelf the new one did NOT come from
-          if (wasId !== "none" && wasFile) fx.push({ slot: s, url: wasFile, kind: "out", side: dir === "next" ? "prev" : "next", fade: false });
-          if (nowId !== "none" && nowFile) fx.push({ slot: s, url: nowFile, kind: "in", side: dir });
-        } else if (wasId !== "none" && wasFile && nowId === "none") {
-          fx.push({ slot: s, url: wasFile, kind: "out", side: "next", fade: true });
-        }
-      });
+    var next = snapshotLayers();
+    // Use compositor order, never shelf order. Stationary and moving layers
+    // share this one stack for the entire flight, including skin variants
+    // whose trait IDs stay the same and partners changed by the trait rules.
+    var paintOrder = next.paintOrder;
+    var layers = [];
+    var flightCount = 0;
+    paintOrder.forEach(function (slot) {
+      var was = prev.files[slot], now = next.files[slot];
+      var wasCell = prev.cells[slot], nowCell = next.cells[slot];
+      if (was === now && wasCell === nowCell) {
+        if (now || nowCell != null) layers.push({ slot: slot, url: now, cell: nowCell });
+        return;
+      }
+      if (was || wasCell != null) layers.push({ slot: slot, url: was, cell: wasCell, kind: "out",
+        side: slot === changedSlot && dir === "next" ? "prev" : "next" });
+      if (now || nowCell != null) layers.push({ slot: slot, url: now, cell: nowCell, kind: "in", side: dir });
+      flightCount++;
+    });
+    if (!flightCount || (motionPreference && motionPreference.matches) ||
+        typeof document.getElementById("ghost").animate !== "function") {
+      return render(true);
     }
-    if (!fx.length) { render(true); return; }
+
     var seq = ++fxSeq;
-    var inSlots = fx.filter(function (f) { return f.kind === "in"; }).map(function (f) { return f.slot; });
-    render(false, inSlots.length ? inSlots : null);
-    fx.forEach(function (f, i) { flyPart(f, i, seq); });
-    setTimeout(function () {
+    // Prepare every layer before replacing the visible composite. A cold
+    // image load must not consume the animation's travel time or leave holes.
+    return Promise.all(layers.map(function (layer) {
+      // Neon artwork is already loaded in the atlas. Keep its exact cell
+      // (including glow) while sharing Classic's timing and flight geometry.
+      if (layer.cell != null) return [null, layer.kind ? neonBounds(layer.cell) : null];
+      return Promise.all([loadImg(layer.url), layer.kind ? artBounds(layer.url) : null]);
+    })).then(function (assets) {
       if (seq !== fxSeq) return;
-      render(false).then(function () {
-        if (seq === fxSeq) clearFx();
+      // The full-resolution final canvas also keeps downloads and the mini
+      // preview current. Reveal it only after all visible flights finish.
+      return render(false).then(function () {
+        if (seq !== fxSeq || (motionPreference && motionPreference.matches)) return;
+        var floater = document.getElementById("floater");
+        floater.classList.remove("pop");
+        var host = document.getElementById("benchfx");
+        var hRect = host.getBoundingClientRect();
+        var gRect = document.getElementById("ghost").getBoundingClientRect();
+        if (hRect.width < 10 || gRect.width < 10) return;
+        var moving = [];
+        layers.forEach(function (layer, i) {
+          var cv = document.createElement("canvas");
+          // Retain all 47 × 47 pixels, including faint/transparent edges, so
+          // the landing frame exactly matches the flattened ghost canvas.
+          cv.width = 47; cv.height = 47;
+          cv.className = "flight-layer";
+          cv.dataset.slot = layer.slot;
+          cv.style.left = (gRect.left - hRect.left) + "px";
+          cv.style.top = (gRect.top - hRect.top) + "px";
+          cv.style.width = gRect.width + "px";
+          cv.style.height = gRect.height + "px";
+          var ctx = cv.getContext("2d");
+          ctx.imageSmoothingEnabled = false;
+          if (layer.cell != null) drawAtlasCell(ctx, layer.cell, 0, 0, 47, 47);
+          else ctx.drawImage(assets[i][0], 0, 0, 47, 47);
+          host.appendChild(cv);
+          if (layer.kind && assets[i][1]) {
+            moving.push({ canvas: cv, layer: layer, bounds: assets[i][1] });
+          }
+        });
+        floater.classList.add("is-flying");
+        fxAnimations = moving.map(function (part) {
+          return flyPart(part, gRect);
+        });
+        return Promise.all(fxAnimations.map(function (animation) { return animation.finished; }))
+          .then(function () { if (seq === fxSeq) clearFx(); });
       });
-    }, FX_MS + fx.length * 50 + 40);
+    }).catch(function (err) {
+      // Cancellation belongs to the newer action; it must never repaint it.
+      if (seq !== fxSeq) return;
+      clearFx();
+      console.error("[ghostmaker flights]", err);
+      return render(false);
+    });
   }
 
-  function flyPart(f, i, seq) {
-    Promise.all([loadImg(f.url), artBounds(f.url)]).then(function (r) {
-      if (seq !== fxSeq || !r[1]) return;
-      var im = r[0], bb = r[1];
-      var bench = document.getElementById("bench");
-      var bRect = bench.getBoundingClientRect();
-      if (bRect.width < 10) return;   // hidden/unmeasured pane — skip cosmetics
-      var gRect = document.getElementById("ghost").getBoundingClientRect();
-      var scale = gRect.width / 47;
-      var fw = bb.w * scale, fh = bb.h * scale;
-      var fx0 = gRect.left - bRect.left + bb.x * scale;
-      var fy0 = gRect.top - bRect.top + bb.y * scale;
-      var row = rows[f.slot];
-      var chip = f.side === "prev" ? row.prevChip : row.nextChip;
-      var cRect = chip.getBoundingClientRect();
-      var cs = chipScaleFor(bb);
-      var cw = bb.w * cs, ch = bb.h * cs;
-      var cx0 = cRect.left - bRect.left + (cRect.width - cw) / 2;
-      var cy0 = cRect.top - bRect.top + (cRect.height - ch) / 2;
-
-      var cv = document.createElement("canvas");
-      cv.width = bb.w; cv.height = bb.h;
-      cv.className = "flypart";
-      cv.style.left = fx0 + "px";
-      cv.style.top = fy0 + "px";
-      cv.style.width = fw + "px";
-      cv.style.height = fh + "px";
-      var ctx = cv.getContext("2d");
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(im, bb.x, bb.y, bb.w, bb.h, 0, 0, bb.w, bb.h);
-      document.getElementById(f.slot === "bg" ? "benchfx-back" : "benchfx").appendChild(cv);
-
-      var atChip = "translate(" + (cx0 - fx0) + "px, " + (cy0 - fy0) + "px) scale(" + (cw / fw) + ")";
-      cv.style.transitionDelay = (i * 50) + "ms";
-      if (f.kind === "in") {
-        cv.style.transform = atChip;
-        void cv.offsetWidth;
-        cv.classList.add("fly");
-        cv.style.transform = "translate(0, 0) scale(1)";
-      } else {
-        cv.style.transform = "translate(0, 0) scale(1)";
-        void cv.offsetWidth;
-        cv.classList.add("fly");
-        cv.style.transform = atChip;
-        if (f.fade) cv.style.opacity = "0";
-      }
-    }).catch(function () {});
+  function flyPart(part, gRect) {
+    var f = part.layer, bb = part.bounds;
+    var row = rows[f.slot];
+    var chip = f.side === "prev" ? row.prevChip : row.nextChip;
+    var cRect = chip.getBoundingClientRect();
+    var cs = chipScaleFor(bb);
+    // Translate the full frame so its opaque art is centered in the shelf.
+    var tx = cRect.left + (cRect.width - bb.w * cs) / 2 - bb.x * cs - gRect.left;
+    var ty = cRect.top + (cRect.height - bb.h * cs) / 2 - bb.y * cs - gRect.top;
+    var atChip = "translate(" + tx + "px, " + ty + "px) scale(" + (cs / (gRect.width / 47)) + ")";
+    var atGhost = "translate(0, 0) scale(1)";
+    var incoming = f.kind === "in";
+    return part.canvas.animate([
+      { transform: incoming ? atChip : atGhost, opacity: 1 },
+      { transform: incoming ? atGhost : atChip, opacity: incoming ? 1 : 0 }
+    ], {
+      duration: FX_MS,
+      delay: incoming ? 50 : 0,
+      easing: "cubic-bezier(0.2, 0.8, 0.3, 1)",
+      fill: "both"
+    });
   }
 
   // ---------- part browser (the /studio trait picker, per slot) ----------
@@ -1318,11 +1321,11 @@
     picker.prevFocus = document.activeElement;
     var neonSkin = neonMode && slot === "skin";
     picker.el.classList.toggle("neon-skin-picker", neonSkin);
-    picker.title.textContent = neonSkin ? "Neon recipe" : SLOT_LABEL[slot];
-    picker.searchLabel.textContent = neonSkin ? "SEARCH RECIPES" : "SEARCH PARTS";
+    picker.title.textContent = neonSkin ? "Neon skin" : SLOT_LABEL[slot];
+    picker.searchLabel.textContent = neonSkin ? "SEARCH BODY COLORS" : "SEARCH PARTS";
     picker.input.placeholder = neonSkin
-      ? "Try purple cyan, orange accent, preferred…"
-      : "Try crown, glasses, coffee, gold…";
+      ? "Try pink, purple cyan, orange…"
+      : neonMode ? "Try horns blue, crown pink, coffee…" : "Try crown, glasses, coffee, gold…";
     picker.skinControls.hidden = !neonSkin;
     if (neonSkin) {
       var skinStyle = parseNeonVariant(state.skin, "skin");
@@ -1360,9 +1363,9 @@
   }
 
   function applyPickerSkinStyle() {
-    var recipeIndex = recipeIndexFromSkin(state.skin);
+    var palette = parseNeonVariant(state.skin, "skin").palette;
     var target = neonOptionsFor("skin").filter(function (option) {
-      return option.recipeIndex === recipeIndex && option.light === picker.skinLight && option.bloom === picker.skinBloom;
+      return option.palette === palette && option.light === picker.skinLight && option.bloom === picker.skinBloom;
     })[0];
     if (target && target.id !== state.skin) neonUserSet("skin", target.id);
     renderPickerGrid();
@@ -1373,12 +1376,11 @@
     var opts = optionsFor(slot);
     var neonSkin = neonMode && slot === "skin";
     if (neonSkin) {
-      // A recipe card plus these two compact controls represents the same
-      // ten body variants that used to appear as ten near-identical cards.
+      // One card per body palette, with brightness and glow controlled above.
       opts = opts.filter(function (option) {
         return option.light === picker.skinLight && option.bloom === picker.skinBloom;
       }).sort(function (a, b) {
-        return Number(b.preferred) - Number(a.preferred) || a.recipeIndex - b.recipeIndex;
+        return a.label.localeCompare(b.label);
       });
       Array.prototype.forEach.call(picker.lightButtons, function (button) {
         button.setAttribute("aria-pressed", Number(button.getAttribute("data-neon-light")) === picker.skinLight ? "true" : "false");
@@ -1389,8 +1391,8 @@
     }
     picker.micro.textContent = neonMode
       ? (slot === "skin"
-        ? "98 CURATED PALETTE RECIPES · 77 PREFERRED · UNLISTED COMBINATIONS BLOCKED"
-        : "OFFICIAL NEON ART · " + opts.length + " ELIGIBLE FOR " + recipeLabel(currentRecipe()).toUpperCase())
+        ? NEON.skinPalettes.length + " BODY PALETTES · ACCESSORY COLORS ARE INDEPENDENT"
+        : "OFFICIAL NEON ART · ALL 11 ACCESSORY COLORS · SEARCH BY PART OR COLOR")
       : "OFFICIAL DEAD PIXELS ART · " + opts.length + " ELIGIBLE FOR " + skinLabel(state.skin).toUpperCase();
     var terms = picker.input.value.toLowerCase().split(/\s+/).filter(Boolean);
     var cur = stateIdFor(slot);
@@ -1399,12 +1401,12 @@
       var hay = (o.label + " " + variantOf(slot, o) + " " + o.id + " " + (o.file || "")).toLowerCase();
       return terms.every(function (t) { return hay.indexOf(t) !== -1; });
     });
-    var noun = neonSkin ? "RECIPE" : "PART";
+    var noun = neonSkin ? "PALETTE" : "PART";
     picker.status.textContent = shown.length + " MATCHING " + noun + (shown.length === 1 ? "" : "S");
     picker.clear.hidden = !picker.input.value;
     picker.grid.textContent = "";
     picker.empty.hidden = shown.length > 0;
-    picker.empty.textContent = "NO " + (neonSkin ? "RECIPES" : "PARTS") + " MATCH “" + picker.input.value + "”";
+    picker.empty.textContent = "NO " + (neonSkin ? "PALETTES" : "PARTS") + " MATCH “" + picker.input.value + "”";
     shown.forEach(function (o) {
       var btn = document.createElement("button");
       btn.type = "button";
@@ -1453,8 +1455,7 @@
   function unitId() {
     var s = ROW_ORDER.map(function (k) {
       var id = stateIdFor(k);
-      // Recipe metadata controls future choices but does not change the
-      // rendered skin pixels, so keep visual-identical builds on one ID.
+      // Ignore legacy recipe suffixes so identical artwork keeps its unit ID.
       if (neonMode && k === "skin") id = skinLayerId(id);
       return k + ":" + id;
     }).join("|");
@@ -1465,13 +1466,14 @@
 
   function updateUnit() {
     var unit = document.getElementById("unit");
-    unit.textContent = neonMode ? "NEON " + unitId() + " · CURATED" : "UNIT " + unitId();
+    unit.textContent = neonMode ? "NEON " + unitId() : "UNIT " + unitId();
     var ghost = document.getElementById("ghost");
     var summary = ROW_ORDER.map(function (slot) {
       return SLOT_LABEL[slot] + ": " + traitLabel(slot, stateIdFor(slot));
     }).join("; ");
-    ghost.setAttribute("aria-label", (neonMode ? "Curated Neon ghost. " : "Assembled ghost. ") + summary);
+    ghost.setAttribute("aria-label", (neonMode ? "Neon ghost. " : "Assembled ghost. ") + summary);
     updateMintBadge();
+    scheduleShareRender();
   }
 
   // ---------- circulation check -------------------------------------------
@@ -1567,6 +1569,218 @@
     }
     host.appendChild(pill);
     host.appendChild(sub);
+    updatePostButton(serials);
+  }
+
+  function updatePostButton(serials) {
+    var btn = document.getElementById("btn-post-x");
+    var hint = document.getElementById("xpost-hint");
+    if (!btn || !hint) return;
+    var taken = serials.length > 0;
+    btn.disabled = taken;
+    btn.title = taken ? "This ghost is already minted — change a trait to enter"
+      : "Post this build to X as a Ghostmaker contest entry";
+    hint.textContent = taken ? "already minted — change a trait to enter"
+      : prefersShareSheet() ? "opens your share sheet — pick X"
+      : "opens X with your entry · your ghost is copied, paste it in (" + pasteKeys() + ")";
+  }
+
+  // ---------- contest entry: post to X ------------------------------------
+  // X's post links can prefill text but never attach media, so the image
+  // travels separately: phones hand image + text to the X app through the
+  // native share sheet; desktops get the image on the clipboard while X's
+  // composer opens with the text filled in, ready for a paste. Every post
+  // carries a link that reopens this exact build — how an entry is judged,
+  // and minted trait for trait if it wins.
+
+  var SITE = "https://www.deadpixels.club";
+  var CLUB_HANDLE = "deadpixels_club";
+  var CONTEST_TAG = "GhostmakerContest";
+  var SHARE_PX = 47 * 24;   // an integer upscale keeps every pixel crisp
+  var SHARE_KEYS = {
+    bg: "bg", skin: "skin", head: "head", eyes: "eyes", mouth: "mouth",
+    hand_left: "lh", hand_right: "rh", propulsion: "prop"
+  };
+
+  function shareQuery() {
+    var parts = neonMode ? ["m=neon"] : [];
+    ROW_ORDER.forEach(function (slot) {
+      var id = neonMode && slot === "skin" ? skinLayerId(state.skin) : state[slot];
+      if (!id || id === "none") return;
+      // Every trait id is [a-z0-9_$]; "." stands in for "$" so the link
+      // needs no percent-encoding and survives X's URL detection intact.
+      parts.push(SHARE_KEYS[slot] + "=" + id.replace(/\$/g, "."));
+    });
+    return parts.join("&");
+  }
+
+  function shareUrl() { return SITE + "/ghostmaker?" + shareQuery(); }
+
+  // {neon, values} from a ?skin=…&head=… query, or null if it isn't one
+  function readSharedBuild(search) {
+    var q = new URLSearchParams(search || "");
+    if (!q.get("skin")) return null;
+    var values = {};
+    ROW_ORDER.forEach(function (slot) {
+      var raw = q.get(SHARE_KEYS[slot]);
+      values[slot] = raw && /^[a-z0-9_.]{1,96}$/.test(raw) ? raw.replace(/\./g, "$") : "none";
+    });
+    return { neon: q.get("m") === "neon", values: values };
+  }
+
+  // A shared link is only a request: every value is re-checked against the
+  // vault and the rules, so a hand-edited link still lands on a legal ghost.
+  function applySharedClassic(shared) {
+    var v = shared.values;
+    state.skin = G.skins.some(function (s) { return s.id === v.skin; }) ? v.skin : DEFAULT_STATE.skin;
+    state.bg = G.backgrounds.some(function (b) { return b.id === v.bg; }) ? v.bg : DEFAULT_STATE.bg;
+    TRAIT_SLOTS.forEach(function (slot) {
+      state[slot] = v[slot] !== "none" && availableNow(slot, v[slot]) ? v[slot] : "none";
+    });
+    applyRules([], null);
+  }
+
+  function enterSharedNeon(shared) {
+    var v = shared.values;
+    var fallback = defaultNeonState();
+    classicState = copyState(state);
+    neonMode = true;
+    document.body.classList.add("neon-builder");
+    state.skin = NEON.layers.skin[v.skin] != null ? v.skin : fallback.skin;
+    state.bg = NEON.backgrounds.some(function (b) { return b.id === v.bg; }) ? v.bg : fallback.bg;
+    TRAIT_SLOTS.forEach(function (slot) {
+      state[slot] = v[slot] !== "none" && availableNow(slot, v[slot]) ? v[slot] : "none";
+    });
+    applyNeonRules([], null);
+    setNeonButton("active");
+  }
+
+  function openSharedNeon(shared) {
+    var request = ++neonOpenRequest;
+    pushLog([{ t: "opening a shared Neon build…" }]);
+    ensureNeonLoaded().then(function () {
+      if (request !== neonOpenRequest || neonMode) return;
+      clearFx();
+      enterSharedNeon(shared);
+      syncRows();
+      render(true);
+      pushLog([{ t: "shared Neon build loaded" }]);
+    }).catch(function (err) {
+      console.error("[ghostmaker shared]", err);
+      pushLog([{ t: "the shared Neon build couldn't load — tap the switch to retry", warn: true }]);
+    });
+  }
+
+  var shareCache = { key: null, blob: null, pending: null };
+  var shareTimer = 0;
+
+  function shareKey() {
+    return (neonMode ? "n" : "c") + "|" + ROW_ORDER.map(function (slot) { return state[slot]; }).join("|");
+  }
+
+  // the share image for the bench as it stands, rendered once per build
+  function shareBlob() {
+    var key = shareKey();
+    if (shareCache.key === key) return shareCache.blob ? Promise.resolve(shareCache.blob) : shareCache.pending;
+    var pending = composeCurrent(SHARE_PX, false).then(canvasBlob).then(function (blob) {
+      if (shareCache.key === key) { shareCache.blob = blob; shareCache.pending = null; }
+      return blob;
+    });
+    pending.catch(function () {
+      if (shareCache.key === key) shareCache = { key: null, blob: null, pending: null };
+    });
+    shareCache = { key: key, blob: null, pending: pending };
+    return pending;
+  }
+
+  // Render ahead of the click: iOS only opens the share sheet from inside the
+  // tap itself, so the file has to exist before the user reaches the button.
+  function scheduleShareRender() {
+    clearTimeout(shareTimer);
+    shareTimer = setTimeout(function () { shareBlob().catch(function () {}); }, 400);
+  }
+
+  function prefersShareSheet() {
+    if (typeof navigator.share !== "function" || typeof navigator.canShare !== "function") return false;
+    if (typeof matchMedia !== "function" || !matchMedia("(pointer: coarse)").matches) return false;
+    try {
+      return navigator.canShare({ files: [new File([""], "ghost.png", { type: "image/png" })] });
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function pasteKeys() {
+    return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "") ? "⌘V" : "Ctrl+V";
+  }
+
+  function postText() {
+    return "My " + (neonMode ? "Neon " : "") + "entry for the @" + CLUB_HANDLE + " Ghostmaker contest 👻\n\n" +
+      shareUrl() + "\n\n#" + CONTEST_TAG;
+  }
+
+  function intentUrl(text) { return "https://x.com/intent/tweet?text=" + encodeURIComponent(text); }
+
+  // a tap-able link in the hint, for when the browser won't open X for us
+  function offerLink(label, href) {
+    var hint = document.getElementById("xpost-hint");
+    hint.textContent = "";
+    var a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = label;
+    hint.appendChild(a);
+  }
+
+  function postToX() {
+    if (!G || circulationSerials().length) return;
+    var text = postText();
+    var intent = intentUrl(text);
+    var name = "ghostmaker-" + (neonMode ? "neon-" : "") + unitId().toLowerCase() + ".png";
+    var ready = shareCache.key === shareKey() ? shareCache.blob : null;
+
+    if (prefersShareSheet()) {
+      var sheet = function (blob) {
+        return navigator.share({ files: [new File([blob], name, { type: "image/png" })], text: text });
+      };
+      var sent;
+      try { sent = ready ? sheet(ready) : shareBlob().then(sheet); } catch (err) { sent = Promise.reject(err); }
+      sent.then(function () {
+        pushLog([{ t: "entry handed to your share sheet — good luck" }]);
+      }).catch(function (err) {
+        if (err && err.name === "AbortError") return;   // the sheet was closed
+        // A sheet can refuse a file that finished rendering after the tap;
+        // it's ready now, and X is one tap away either way.
+        offerLink("open X with your entry text ↗", intent);
+        pushLog([{ t: "the share sheet didn't open — tap Post again, or use the X link", warn: true }]);
+      });
+      return;
+    }
+
+    var copied;
+    try {
+      if (typeof ClipboardItem === "undefined" || !navigator.clipboard || !navigator.clipboard.write) {
+        throw new Error("no image clipboard");
+      }
+      copied = navigator.clipboard.write([new ClipboardItem({ "image/png": ready || shareBlob() })]);
+    } catch (err) {
+      copied = Promise.reject(err);
+    }
+    // Open X inside the click, before anything awaits, so pop-up blockers
+    // see a direct user action.
+    var win = window.open(intent, "_blank");
+    if (win) {
+      try { win.opener = null; } catch (err) {}
+    } else {
+      offerLink("pop-up blocked — open X with your entry ↗", intent);
+    }
+    copied.then(function () {
+      pushLog([{ t: "ghost copied — paste it into your X post (" + pasteKeys() + ")" }]);
+    }).catch(function () {
+      shareBlob().then(function (blob) { saveBlob(blob, name); }).catch(function () {});
+      pushLog([{ t: "couldn't copy the image here — it downloaded instead; attach it to your post", warn: true }]);
+    });
   }
 
   function num(x) { return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
@@ -1600,7 +1814,7 @@
     applyNeonRules([], null);
     syncRows();
     render(true);
-    pushLog([{ t: "random curated Neon — " + recipeLabel(currentRecipe()) }]);
+    pushLog([{ t: "random Neon — " + skinLabel(state.skin) }]);
   }
 
   // the baseline is Ghost #1; in the Neon lab it's the Neon default for the
@@ -1672,7 +1886,7 @@
       restoreState(defaultNeonState());
       syncRows();
       render(true);
-      pushLog([{ t: "Neon bench reset — curated purple → cyan recipe" }]);
+      pushLog([{ t: "Neon bench reset — purple → cyan" }]);
       return;
     }
     neonOpenRequest++;
@@ -1683,48 +1897,48 @@
     pushLog([{ t: "bench reset — ghost #1, as minted" }]);
   }
 
-  function download(noBg) {
-    if (neonMode) {
-      var downloadState = copyState(state);
-      var neonFilename = "ghostmaker-neon-" + unitId().toLowerCase() + (noBg ? "-nobg" : "") + ".png";
-      composeNeonCanvas(470, !noBg, noBg ? ["bg"] : null, downloadState).then(function (neonCanvas) {
-        neonCanvas.toBlob(function (blob) {
-          var link = document.createElement("a");
-          var neonHref = URL.createObjectURL(blob);
-          link.href = neonHref;
-          link.download = neonFilename;
-          document.body.appendChild(link);
-          link.click();
-          setTimeout(function () { link.remove(); }, 1000);
-          setTimeout(function () { URL.revokeObjectURL(neonHref); }, 60000);
-        }, "image/png");
-      }).catch(function () {
-        pushLog([{ t: "download failed — a Neon layer would not load", warn: true }]);
-      });
-      return;
-    }
-    var classicFilename = "ghostmaker-" + unitId().toLowerCase() + (noBg ? "-nobg" : "") + ".png";
+  // the bench's current build as a canvas, at any integer scale of 47px
+  function composeCurrent(size, noBg) {
+    if (neonMode) return composeNeonCanvas(size, !noBg, noBg ? ["bg"] : null, copyState(state));
     var urls = layerUrls(noBg ? ["bg"] : null);
-    Promise.all(urls.map(loadImg)).then(function (imgs) {
+    return Promise.all(urls.map(loadImg)).then(function (imgs) {
       var cv = document.createElement("canvas");
-      cv.width = 470; cv.height = 470;
+      cv.width = size; cv.height = size;
       var ctx = cv.getContext("2d");
       ctx.imageSmoothingEnabled = false;
-      imgs.forEach(function (im) { ctx.drawImage(im, 0, 0, 470, 470); });
+      imgs.forEach(function (im) { ctx.drawImage(im, 0, 0, size, size); });
+      return cv;
+    });
+  }
+
+  function canvasBlob(cv) {
+    return new Promise(function (resolve, reject) {
       cv.toBlob(function (blob) {
-        var a = document.createElement("a");
-        var href = URL.createObjectURL(blob);
-        a.href = href;
-        a.download = classicFilename;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function () { a.remove(); }, 1000);
-        // iOS Safari dereferences the blob only after its download sheet is
-        // confirmed — revoking early breaks it, so wait generously
-        setTimeout(function () { URL.revokeObjectURL(href); }, 60000);
+        if (blob) resolve(blob); else reject(new Error("toBlob failed"));
       }, "image/png");
+    });
+  }
+
+  function saveBlob(blob, filename) {
+    var a = document.createElement("a");
+    var href = URL.createObjectURL(blob);
+    a.href = href;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { a.remove(); }, 1000);
+    // iOS Safari dereferences the blob only after its download sheet is
+    // confirmed — revoking early breaks it, so wait generously
+    setTimeout(function () { URL.revokeObjectURL(href); }, 60000);
+  }
+
+  function download(noBg) {
+    var neon = neonMode;
+    var filename = "ghostmaker-" + (neon ? "neon-" : "") + unitId().toLowerCase() + (noBg ? "-nobg" : "") + ".png";
+    composeCurrent(470, noBg).then(canvasBlob).then(function (blob) {
+      saveBlob(blob, filename);
     }).catch(function () {
-      pushLog([{ t: "download failed — a layer would not load", warn: true }]);
+      pushLog([{ t: "download failed — a " + (neon ? "Neon " : "") + "layer would not load", warn: true }]);
     });
   }
 
@@ -1756,6 +1970,7 @@
     document.getElementById("btn-reset").addEventListener("click", resetAll);
     document.getElementById("btn-save").addEventListener("click", function () { download(false); });
     document.getElementById("btn-save-nobg").addEventListener("click", function () { download(true); });
+    document.getElementById("btn-post-x").addEventListener("click", postToX);
     ["btn-random", "btn-reset", "btn-save", "btn-save-nobg"].forEach(function (id) {
       document.getElementById(id).disabled = false;
     });
@@ -1779,8 +1994,17 @@
       miniObserver.observe(document.querySelector(".actions"));
     }
 
+    // A shared entry link (?skin=…) reopens that exact build; otherwise the
+    // page lands on the competition default.
+    var shared = readSharedBuild(location.search);
+    if (shared && !shared.neon) {
+      applySharedClassic(shared);
+      syncRows();
+    }
     render(false);
-    if (DEFAULT_TO_NEON) toggleNeonBuilder();
+    if (shared && shared.neon) openSharedNeon(shared);
+    else if (shared) pushLog([{ t: "shared build loaded" }]);
+    else if (DEFAULT_TO_NEON) toggleNeonBuilder();
     else pushLog([{ t: "vault open — 9,412 minted ghosts · Neon lab available" }]);
   }).catch(function (err) {
     console.error("[ghostmaker] init failed", err);
@@ -1792,8 +2016,7 @@
     });
   });
 
-  // test hooks (synchronous where possible; the browser pane throttles
-  // rAF/CSS transitions — finish() finalizes any in-flight parts)
+  // Test hooks; finish() finalizes any in-flight parts.
   window.__gm = {
     ready: ready,
     get state() { return state; },
@@ -1809,6 +2032,23 @@
     toggleNeonBuilder: toggleNeonBuilder,
     reset: resetAll,
     unitId: unitId,
+    shareUrl: shareUrl,
+    postText: postText,
+    postToX: postToX,
+    shareBlob: shareBlob,
+    // applies a share query exactly as page load does, without reloading
+    loadShared: function (search) {
+      var shared = readSharedBuild(search);
+      if (!shared) return Promise.resolve(false);
+      clearFx();
+      var apply = function () {
+        leaveNeonMode();
+        if (shared.neon) enterSharedNeon(shared); else applySharedClassic(shared);
+        syncRows();
+        return render(false).then(function () { return true; });
+      };
+      return shared.neon ? ensureNeonLoaded().then(apply) : apply();
+    },
     finish: function () {
       clearFx();
       return render(false);

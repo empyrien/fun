@@ -65,12 +65,15 @@
 
   .ghostcol { grid-column: 3; grid-row: 1 / span 8; align-self: center; position: relative; z-index: 3; }
   .floatwrap { position: relative; width: calc(47px * var(--gs)); max-width: 100%; }
-  .floater { position: relative; }
+  .floater {
+    position: relative; border-radius: 16px;
+    box-shadow: 0 24px 48px -20px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255,255,255,0.06);
+  }
+  .floater.is-flying #ghost { opacity: 0; }
   canvas#ghost {
     display: block; width: 100%; aspect-ratio: 1;
     image-rendering: crisp-edges; image-rendering: pixelated;
     border-radius: 16px;
-    box-shadow: 0 24px 48px -20px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255,255,255,0.06);
   }
   .shadow {
     width: 40%; height: 12px; margin: 14px auto 0; border-radius: 50%;
@@ -93,6 +96,28 @@
   .mintbadge .pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
   .mintbadge.taken .pill { border-color: rgba(255,171,132,0.55); color: var(--warn); background: rgba(255,171,132,0.08); }
   .mintbadge .sub { font-size: 9px; letter-spacing: 0.1em; color: var(--ink-dim); }
+
+  /* contest entry: post the build to X, gated by the badge above */
+  .enter { margin: 14px auto 0; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .xpost {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 10px 19px 10px 16px; border-radius: 999px; cursor: pointer;
+    background: #000; color: #fff; border: 1px solid rgba(255, 255, 255, 0.24);
+    font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+    box-shadow: 0 12px 26px -14px rgba(0, 0, 0, 0.8);
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.25s ease, opacity 0.15s ease;
+  }
+  .xpost svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+  .xpost:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.6); transform: translateY(-1px); }
+  .xpost:active:not(:disabled) { transform: scale(0.97); }
+  .xpost:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--led-dim); }
+  .xpost:disabled { opacity: 0.32; cursor: default; }
+  .neon-builder .xpost:not(:disabled) { box-shadow: 0 12px 26px -14px rgba(0, 0, 0, 0.8), 0 0 22px rgba(140, 90, 255, 0.28); }
+  .xhint {
+    max-width: 36ch; text-align: center;
+    font-family: var(--mono); font-size: 9px; line-height: 1.5; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  .xhint a { color: var(--led); text-decoration: underline; text-underline-offset: 2px; }
   .floater.pop { animation: pop 0.26s ease-out; }
   @keyframes pop { 0% { scale: 1; } 35% { scale: 1.03; } 100% { scale: 1; } }
   @media (prefers-reduced-motion: reduce) { .floater.pop { animation: none !important; } }
@@ -145,15 +170,13 @@
   .chip:disabled { opacity: 0.25; cursor: default; }
   .chip:disabled:hover { border-color: var(--card-edge); transform: none; background: var(--card); }
 
-  /* flying parts */
-  #benchfx-back, #benchfx { position: absolute; inset: 0; pointer-events: none; }
-  #benchfx-back { z-index: 1; }   /* backdrops fly under the ghost */
-  #benchfx { z-index: 4; }
-  .flypart {
-    position: absolute; transform-origin: top left;
+  /* Keep flights inside the floater so Neon uses the same glow/filter
+     before, during, and after the layered animation. */
+  #benchfx { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+  .flight-layer {
+    position: absolute; transform-origin: top left; border-radius: 16px;
     image-rendering: crisp-edges; image-rendering: pixelated;
   }
-  .flypart.fly { transition: transform 0.34s cubic-bezier(0.2, 0.8, 0.3, 1.12), opacity 0.3s ease; }
 
   .log {
     min-height: 34px;
@@ -181,7 +204,7 @@
     background: radial-gradient(120% 90% at 50% 0%, #1c1828 0%, #14111d 52%, #0b0911 100%);
   }
   .neon-builder .chip, .neon-builder .dice, .neon-builder .browse, .neon-builder .revert { background: rgba(0, 0, 0, 0.22); border-color: rgba(255, 255, 255, 0.09); }
-  .neon-builder canvas#ghost { box-shadow: 0 30px 60px -22px rgba(0, 0, 0, 0.85), 0 0 48px rgba(47, 239, 255, 0.12), inset 0 0 0 1px rgba(255,255,255,0.05); }
+  .neon-builder .floater { box-shadow: 0 30px 60px -22px rgba(0, 0, 0, 0.85), 0 0 48px rgba(47, 239, 255, 0.12), inset 0 0 0 1px rgba(255,255,255,0.05); }
   .neon-builder .ghostcol { filter: drop-shadow(0 0 20px rgba(47, 239, 255, 0.2)); }
   .neon-builder .rowcount { color: rgba(80, 240, 255, 0.66); }
   .neon-loading .bench { opacity: 0.55; transition: opacity 0.18s ease; }
@@ -263,6 +286,14 @@
     .chip-prev { grid-column: 2; }
     .chip-next { grid-column: 4; }
     .rowcount { grid-column: 5; }
+  }
+  @media (max-width: 600px) {
+    .bench { grid-auto-rows: 104px; }
+    .ghostcol { min-width: 0; max-width: 100%; }
+    .floatwrap { width: min(calc(47px * var(--gs)), calc(100vw - 40px)); }
+    .rowmeta { flex-wrap: wrap; padding: 4px 0; }
+    .rowmeta .rowtext { flex: 0 0 100%; margin-right: 0; }
+    .dice, .browse, .revert { width: 36px; height: 36px; }
   }
 
   /* ---------- part browser (ported from /studio's trait picker) --------- */
@@ -402,17 +433,23 @@
     </div>
   </header>
   <div class="bench" id="bench">
-    <div id="benchfx-back" aria-hidden="true"></div>
     <div class="ghostcol">
       <div class="floatwrap">
         <div class="floater" id="floater">
           <canvas id="ghost" width="47" height="47" role="img" aria-label="Your assembled ghost">Your assembled ghost.</canvas>
+          <div id="benchfx" aria-hidden="true"></div>
         </div>
         <div class="shadow"></div>
         <div class="mintbadge" id="mintbadge" aria-live="polite"></div>
+        <div class="enter">
+          <button class="xpost" id="btn-post-x" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg>
+            <span>Post your entry</span>
+          </button>
+          <div class="xhint" id="xpost-hint" aria-live="polite"></div>
+        </div>
       </div>
     </div>
-    <div id="benchfx" aria-hidden="true"></div>
   </div>
   <div class="log" id="log" aria-live="polite"></div>
   <div class="actions">
@@ -423,6 +460,6 @@
   </div>
 </main>
 <canvas id="mini" width="47" height="47" aria-hidden="true"></canvas>
-<script src="/js/ghostmaker.js?v=19"></script>
+<script src="/js/ghostmaker.js?v=23"></script>
 </body>
 </html>
